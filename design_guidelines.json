@@ -1,0 +1,147 @@
+{
+  "theme": "light",
+  "typography": {
+    "headings": {
+      "family": "Manrope",
+      "import_url": "https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;600;800&display=swap",
+      "rules": "Never use Inter for headings. Use tracking-tight for sizes > 32px. Use font-black for impact and font-light for elegance. Do not center-align by default."
+    },
+    "body": {
+      "family": "IBM Plex Sans",
+      "import_url": "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap",
+      "rules": "High legibility for data density. Use leading-relaxed for paragraphs."
+    },
+    "hierarchy": {
+      "H1": "text-4xl sm:text-5xl lg:text-6xl font-black tracking-tighter text-slate-900",
+      "H2": "text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-slate-800",
+      "H3": "text-xl sm:text-2xl font-semibold text-slate-800",
+      "Body": "text-base text-slate-600",
+      "Labels": "text-xs font-bold uppercase tracking-[0.2em] text-slate-500"
+    }
+  },
+  "colors": {
+    "archetype": "Swiss & High-Contrast (Cooling Tech Twist)",
+    "primary": {
+      "DEFAULT": "#0047AB",
+      "foreground": "#FFFFFF",
+      "description": "Vibrant Cobalt Blue. Represents cool air, reliability, and corporate trust."
+    },
+    "secondary": {
+      "DEFAULT": "#F1F5F9",
+      "foreground": "#0F172A",
+      "description": "Ice Grey / Off-white for section backgrounds to avoid harsh contrast."
+    },
+    "accent": {
+      "DEFAULT": "#06B6D4",
+      "foreground": "#FFFFFF",
+      "description": "Arctic Cyan for hover states and secondary highlights."
+    },
+    "destructive": {
+      "DEFAULT": "#FF3B30",
+      "foreground": "#FFFFFF",
+      "description": "Signal Red for errors, rejected verifications, or urgent maintenance."
+    },
+    "warning": {
+      "DEFAULT": "#FFCC00",
+      "foreground": "#0F172A",
+      "description": "Energy Yellow for pending status, schedules, or warnings."
+    },
+    "background": "#FFFFFF",
+    "surface": "#F8FAFC",
+    "border": "#E2E8F0"
+  },
+  "layouts": {
+    "marketing_landing_page": {
+      "strategy": "The 'Tetris' Grid (Asymmetrical Bento)",
+      "rules": "Use grid-cols-1 md:grid-cols-12 with gap-8. Mix spans (e.g., Hero col-span-8 row-span-2). No standard Bootstrap columns. Never center-everything."
+    },
+    "admin_dashboard": {
+      "strategy": "High Density Grid (Data-Heavy)",
+      "rules": "grid-cols-1 md:grid-cols-3 lg:grid-cols-4 with gap-4 or gap-6. Sharp edges or max 8px border-radius. Cardless flat rectangles preferred. F-pattern hierarchy."
+    },
+    "technician_mobile": {
+      "strategy": "Mobile-First Task Hub",
+      "rules": "Scannable lists with large touch targets (min-h-[48px]). Prominent 'Next Action' buttons at the bottom. Generous padding (p-4 to p-6)."
+    }
+  },
+  "visual_enhancers": {
+    "surfaces": [
+      {
+        "type": "Crystal Glass",
+        "usage": "Sticky Navbars on Landing Page",
+        "classes": "backdrop-blur-xl bg-white/70 border-b border-slate-200/50 shadow-sm"
+      },
+      {
+        "type": "Grid Borders",
+        "usage": "Admin Dashboard Data Tables & Stats",
+        "classes": "border-collapse border-r border-b border-border/40"
+      }
+    ],
+    "shadows": "Subtle ambient shadows. Never use muddy gray. Use shadow-[0_8px_32px_rgba(0,71,171,0.08)] for hovering primary cards."
+  },
+  "components_instructions": {
+    "general": "Do NOT use HTML elements for advanced interactions. Use Shadcn components and customize their styles.",
+    "buttons": "Pill-shaped (rounded-full) or sharp rectangles (rounded-md) depending on context. MUST have hover transitions (transform & bg color). NEVER use transition-all. Use transition: transform 0.2s ease, background-color 0.2s ease.",
+    "forms": "Use Shadcn Input, Select, Checkbox. Multi-step rental form must have clear progress indicators. Do not use native input type='date', use Shadcn Calendar.",
+    "tables": "Admin dashboard lists must use Shadcn tables with dense padding and clear hover states.",
+    "toasts": "Use Sonner for all notifications (success, error, status updates). Path: /app/frontend/src/components/ui/sonner.js."
+  },
+  "motion": {
+    "hover_states": "All interactive elements must change background hue and slightly translate (e.g., -translate-y-0.5) on hover.",
+    "page_transitions": "Staggered entrance animations for dashboard lists (Framer Motion).",
+    "accessibility": "Respect prefers-reduced-motion. Add aria-hidden='true' to decorative animations."
+  },
+  "accessibility": {
+    "testing": "All interactive and key informational elements MUST include a `data-testid` attribute (e.g., data-testid='submit-rental-form').",
+    "contrast": "Text over images must use bg-black/40 overlay or text-shadow. Do NOT use transparent backgrounds on dropdowns or headers."
+  },
+  "media": {
+    "icons": {
+      "library": "lucide-react",
+      "instruction": "Use Lucide React (default installed). For mobile technician app, use stroke-width 2 for clarity."
+    },
+    "images": [
+      {
+        "url": "https://images.unsplash.com/photo-1718203862467-c33159fdc504?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMjh8MHwxfHNlYXJjaHwxfHxhaXIlMjBjb25kaXRpb25lciUyMGNvb2xpbmclMjBob21lfGVufDB8fHx8MTc4NjE4OTQ3NHww&ixlib=rb-4.1.0&q=85",
+        "category": "Landing Page Hero / Product Display",
+        "description": "White AC unit on a brick wall. Excellent for showcasing product realism on the landing page."
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1762341123870-d706f257a12e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMjh8MHwxfHNlYXJjaHw0fHxhaXIlMjBjb25kaXRpb25lciUyMGNvb2xpbmclMjBob21lfGVufDB8fHx8MTc4NjE4OTQ3NHww&ixlib=rb-4.1.0&q=85",
+        "category": "Rental Catalog",
+        "description": "Modern AC unit displaying 22 degrees. Use in the multi-step form when the customer selects the AC unit."
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1660330589827-da8ab7dd3c02?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NjZ8MHwxfHNlYXJjaHwyfHxodmFjJTIwdGVjaG5pY2lhbiUyMGluc3RhbGxhdGlvbnxlbnwwfHx8fDE3ODYxODk0NzR8MA&ixlib=rb-4.1.0&q=85",
+        "category": "Technician / Services Section",
+        "description": "HVAC technician doing electrical/installation work. Great for the 'Our Technicians' section on the landing page or login screen background for the admin/tech portal."
+      }
+    ]
+  },
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "You tend to converge toward generic, 'on distribution' outputs. Make creative, distinctive frontends that surprise and delight.",
+    "Dark colors look good when used independently without gradients. DO NOT use dark colors as gradients.",
+    "Don't make generic centered layouts, simplistic gradients, and uniform styling.",
+    "Create depth through layered design elements with z-index hierarchy.",
+    "Use glass-morphism effects with backdrop filters (12-24px blur) where applicable (e.g., sticky headers).",
+    "You MUST NOT apply universal transition. Eg: `transition: all`. Always add transitions for specific interactive elements excluding transforms.",
+    "You MUST NOT center align the app container, ie do not add `.App { text-align: center; }` in the css file.",
+    "Always use modern button styles like pill-shaped, or sharp button with interaction animations & color relevant to the app style.",
+    "NEVER use AI assistant Emoji characters like 🤖🧠💭💡🔮🎯 for icons.",
+    "Every interaction needs micro-animations - hover states, transitions, parallax effects, and entrance animations.",
+    "Use 2-3x more spacing than feels comfortable. Cramped designs look cheap.",
+    "All interactive elements MUST have a `data-testid` attribute.",
+    "Shadcn components must be used for complex UI (select, calendar, dialogs).",
+    "The application is Indonesian (Bahasa Indonesia). Ensure all mock text and labels are in Indonesian.",
+    "Never use placeholders like via.placeholder.com. Use the exact image URLs provided in the design guidelines."
+  ],
+  "instructions_to_main_agent": {
+    "setup": "1. Update tailwind.config.js with the precise color palette and fonts. 2. Import Manrope and IBM Plex Sans in index.html or index.css. 3. Ensure Shadcn components are installed as `.js` (JavaScript), not TypeScript, as the project uses JS.",
+    "implementation_phases": {
+      "phase_1": "Build the Marketing Landing page using the Tetris Grid layout and Crystal Glass sticky nav. Use pure HTML/Tailwind for layout structure to maintain asymmetry.",
+      "phase_2": "Implement the multi-step public rental form. It must be mobile-friendly and utilize Shadcn's Form, Input, and Select elements. Do not forget to include Stripe payment integration UI.",
+      "phase_3": "Build the Admin Dashboard with a high-density, cardless, F-pattern layout. Prioritize clear tabular data for tracking operations.",
+      "phase_4": "Build the Field Technician Mobile Dashboard. Maximize scannability, use large touch targets for fat fingers, and prominent action buttons for status updates and photo uploads."
+    }
+  }
+}
