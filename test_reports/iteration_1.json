@@ -1,0 +1,35 @@
+{
+  "summary": "Comprehensive testing of CollerMind AC Rental System. Backend: 36/36 pytest cases pass covering auth (cookies, bcrypt, brute-force protection headers), public tariffs/tracking/access control, admin RBAC + CRUD, settings persistence, rental submission validation (durasi/consent/date/hunian/no-NIK), and E2E order regression (contract signed, invoice Rp1.306.000, Jakarta Selatan region, 10+ status_history entries). Frontend: /sewa 8-step form works end-to-end, all 8 step labels shown, no NIK field, durasi limited to 3/6/12/24, consent required, review shows Estimasi total Rp848.000 (not 'bayar sekarang'), shadcn calendar used. Tracking /tracking: masked name in summary, wrong kontak → 403 with error toast, correct kontak unlocks full access showing contract signed badge, invoice Rp1.306.000 and rekening Jakarta Selatan; no Stripe/checkout UI anywhere.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/admin/tariffs", "issue": "Admin tariffs collection contains duplicate 'Kapasitas=1 PK, Variant=Standart' rows (one at Rp248.000 aktif=true, another at Rp300.000 likely inactive) plus legacy 1.5/2/3 PK Standart entries. Public list filters aktif so users unaffected, but admin UI will show inconsistent duplicates. Suggest deduping and hiding/removing legacy tariffs from admin listing."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(Optional) Cleanup duplicate/legacy tariffs in /api/admin/tariffs listing so admins only see the three approved CollerMind tariffs (0.5 PK Standart 198k, 1 PK Standart 248k, 0.5 PK Inverter 248k)."
+  ],
+  "critical_code_review_comments": [
+    "core.py hitung_extra_pipa uses math.ceil((total_pipa - 3)); if total_pipa is a float like 3.4 this rounds up to 1m extra (charging Rp130k) which may or may not be desired — confirm rounding rule with product (spec example was 5m → 2m extra, which matches).",
+    "routes_public.py submit_rental: rate-limit uses request.client.host which behind ingress may resolve to a proxy IP shared across users, potentially throttling legitimate submissions. Consider using X-Forwarded-For."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py"
+  ],
+  "success_rate": {"backend": "100% (36/36)", "frontend": "100% (form + tracking flows)"},
+  "seed_data_creation": "One TEST_ rental order created during backend pytest submit test (TEST_regression@example.com). Otherwise no persistent test data added.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "Admin maskharor.prakerin@gmail.com/admin123 and Teknisi teknisi@sewaac.id/teknisi123 both work; E2E order CLM-20260815-7GXQ + 081299988877 verified.",
+  "context_for_next_testing_agent": "backend_test.py at /app/backend/tests/backend_test.py provides a regression suite. Note there is a public /api/public/rentals submit rate limit (5/hr per IP); the suite consumes exactly 1 slot per full run (only the success test submits). If you re-run within an hour multiple times, the submit test may 429.",
+  "rca_of_the_issue": "No blocking issues found. Only minor data hygiene concern: multiple 1 PK Standart tariff docs exist in Mongo (one at 248k active, others legacy 300k/1.5 PK etc). Public consumer view correctly shows only aktif tariffs, so behaviour matches spec; admin UX may look confusing."
+}

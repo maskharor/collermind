@@ -1,89 +1,132 @@
-from fastapi import FastAPI, APIRouter
 from dotenv import load_dotenv
-from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
-import os
-import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List
-import uuid
-from datetime import datetime, timezone
-
 
 ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+load_dotenv(ROOT_DIR / ".env")
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+import os
+import logging
+from datetime import datetime, timezone
 
-# Create the main app without a prefix
-app = FastAPI()
+from fastapi import FastAPI
+from starlette.middleware.cors import CORSMiddleware
 
-# Create a router with the /api prefix
-api_router = APIRouter(prefix="/api")
+from core import db, hash_password, now_iso, new_id, DEFAULT_BANK_ACCOUNTS
+from storage import init_storage
+from routes_auth import router as auth_router
+from routes_public import router as public_router
+from routes_admin import router as admin_router
+from routes_tech import router as tech_router
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
-# Define Models
-class StatusCheck(BaseModel):
-    model_config = ConfigDict(extra="ignore")  # Ignore MongoDB's _id field
-    
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+app = FastAPI(title="Sistem Informasi Penyewaan AC CollerMind")
 
-class StatusCheckCreate(BaseModel):
-    client_name: str
+app.include_router(auth_router)
+app.include_router(public_router)
+app.include_router(admin_router)
+app.include_router(tech_router)
 
-# Add your routes to the router instead of directly to app
-@api_router.get("/")
-async def root():
-    return {"message": "Hello World"}
-
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.model_dump()
-    status_obj = StatusCheck(**status_dict)
-    
-    # Convert to dict and serialize datetime to ISO string for MongoDB
-    doc = status_obj.model_dump()
-    doc['timestamp'] = doc['timestamp'].isoformat()
-    
-    _ = await db.status_checks.insert_one(doc)
-    return status_obj
-
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    # Exclude MongoDB's _id field from the query results
-    status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
-    
-    # Convert ISO string timestamps back to datetime objects
-    for check in status_checks:
-        if isinstance(check['timestamp'], str):
-            check['timestamp'] = datetime.fromisoformat(check['timestamp'])
-    
-    return status_checks
-
-# Include the router in the main app
-app.include_router(api_router)
-
+origins = [o for o in [os.environ.get("FRONTEND_URL"), "http://localhost:3000"] if o]
+extra = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip() and o.strip() != "*"]
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=origins + extra,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+
+async def seed_users():
+    admin_email = os.environ.get("ADMIN_EMAIL")
+    admin_password = os.environ.get("ADMIN_PASSWORD")
+    if admin_email and admin_password:
+        existing = await db.users.find_one({"email": admin_email})
+        if not existing:
+            await db.users.insert_one({
+                "id": new_id(), "name": "Admin CollerMind", "email": admin_email, "role": "admin",
+                "password_hash": hash_password(admin_password), "created_at": now_iso(),
+            })
+            logger.info("Admin seeded: %s", admin_email)
+    tech_email = "teknisi@sewaac.id"
+    if not await db.users.find_one({"email": tech_email}):
+        await db.users.insert_one({
+            "id": new_id(), "name": "Budi Teknisi", "email": tech_email, "role": "technician",
+            "password_hash": hash_password("teknisi123"), "created_at": now_iso(),
+        })
+        logger.info("Technician seeded")
+
+
+COLLERMIND_TARIFFS = [
+    {"nama": "0.5 PK Standart", "tipe": "Split", "kapasitas": "0.5 PK", "variant": "Standart", "harga_per_bulan": 198000},
+    {"nama": "1 PK Standart", "tipe": "Split", "kapasitas": "1 PK", "variant": "Standart", "harga_per_bulan": 248000},
+    {"nama": "0.5 PK Inverter", "tipe": "Split", "kapasitas": "0.5 PK", "variant": "Inverter", "harga_per_bulan": 248000},
+]
+
+
+async def seed_master_data():
+    # Tarif Collermind: nonaktifkan yang bukan produk resmi, seed yang belum ada
+    await db.tariffs.update_many(
+        {"nama": {"$nin": [t["nama"] for t in COLLERMIND_TARIFFS]}},
+        {"$set": {"aktif": False, "updated_at": now_iso()}},
+    )
+    for t in COLLERMIND_TARIFFS:
+        existing = await db.tariffs.find_one({"nama": t["nama"]})
+        if existing:
+            await db.tariffs.update_one({"id": existing["id"]}, {"$set": {**t, "aktif": True, "updated_at": now_iso()}})
+        else:
+            await db.tariffs.insert_one({"id": new_id(), **t, "aktif": True, "created_at": now_iso(), "updated_at": now_iso()})
+
+    # Backfill variant pada unit lama
+    await db.air_conditioners.update_many({"variant": {"$exists": False}}, {"$set": {"variant": "Standart"}})
+
+    # Pastikan ada minimal 2 unit ready per produk tarif
+    seed_units = {
+        ("0.5 PK", "Standart"): [("AC-101", "Daikin", 2023), ("AC-102", "Panasonic", 2023)],
+        ("0.5 PK", "Inverter"): [("AC-201", "LG", 2024), ("AC-202", "Samsung", 2024)],
+        ("1 PK", "Standart"): [("AC-103", "Daikin", 2024), ("AC-104", "Gree", 2024)],
+    }
+    for (kap, var), units in seed_units.items():
+        ready = await db.air_conditioners.count_documents({"kapasitas": kap, "variant": var, "status": "ready", "deleted_at": None})
+        if ready < 2:
+            for kode, merk, tahun in units:
+                if not await db.air_conditioners.find_one({"kode_unit": kode}):
+                    await db.air_conditioners.insert_one({
+                        "id": new_id(), "kode_unit": kode, "merk": merk, "kapasitas": kap,
+                        "tipe": "Split", "variant": var, "status": "ready", "tahun": tahun,
+                        "harga_sewa_bulanan": None, "created_at": now_iso(), "updated_at": now_iso(), "deleted_at": None,
+                    })
+    if await db.air_conditioners.count_documents({}) == 0:
+        logger.info("Units seeded")
+
+    # Default rekening per daerah
+    if not await db.settings.find_one({"key": "bank_accounts"}):
+        await db.settings.insert_one({"key": "bank_accounts", "accounts": DEFAULT_BANK_ACCOUNTS, "updated_at": now_iso()})
+        logger.info("Bank accounts seeded")
+
+
+@app.on_event("startup")
+async def startup():
+    try:
+        init_storage()
+        logger.info("Object storage initialized")
+    except Exception as e:
+        logger.error("Storage init failed: %s", e)
+    await db.users.create_index("email", unique=True)
+    await db.rental_orders.create_index("kode", unique=True)
+    await db.rental_orders.create_index("status")
+    await db.customers.create_index("email")
+    await db.login_attempts.create_index("identifier")
+    await db.invoices.create_index("order_id", unique=True)
+    await db.payments.create_index("invoice_id")
+    await db.contracts.create_index("order_id", unique=True)
+    await seed_users()
+    await seed_master_data()
+
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
+    from core import client
     client.close()

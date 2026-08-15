@@ -1,55 +1,62 @@
-import { useEffect } from "react";
-import "@/App.css";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
-import axios from "axios";
-import { HOME } from "@/constants/testIds";
+import "@/App.css";
+import { AuthProvider } from "@/context/AuthContext";
+import { Toaster } from "@/components/ui/sonner";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+import Landing from "@/pages/public/Landing";
+import RentalForm from "@/pages/public/RentalForm";
+import Tracking from "@/pages/public/Tracking";
+import Login from "@/pages/Login";
 
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
+import AdminLayout from "@/layouts/AdminLayout";
+import Dashboard from "@/pages/admin/Dashboard";
+import Orders from "@/pages/admin/Orders";
+import OrderDetail from "@/pages/admin/OrderDetail";
+import Customers from "@/pages/admin/Customers";
+import Units from "@/pages/admin/Units";
+import Tariffs from "@/pages/admin/Tariffs";
+import Schedules from "@/pages/admin/Schedules";
+import Operations from "@/pages/admin/Operations";
+import Reports from "@/pages/admin/Reports";
+import Users from "@/pages/admin/Users";
+import Settings from "@/pages/admin/Settings";
 
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
-
-  return (
-    <div>
-      <header className="App-header">
-        <a
-          data-testid={HOME.emergentLink}
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
-    </div>
-  );
-};
+import TechLayout from "@/layouts/TechLayout";
+import TechDashboard from "@/pages/tech/TechDashboard";
+import TechTask from "@/pages/tech/TechTask";
 
 function App() {
   return (
-    <div className="App">
+    <AuthProvider>
       <BrowserRouter>
+        <Toaster richColors position="top-center" />
         <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
+          <Route path="/" element={<Landing />} />
+          <Route path="/sewa" element={<RentalForm />} />
+          <Route path="/tracking" element={<Tracking />} />
+          <Route path="/login" element={<Login />} />
+
+          <Route path="/admin" element={<AdminLayout />}>
+            <Route index element={<Dashboard />} />
+            <Route path="orders" element={<Orders />} />
+            <Route path="orders/:id" element={<OrderDetail />} />
+            <Route path="customers" element={<Customers />} />
+            <Route path="units" element={<Units />} />
+            <Route path="tariffs" element={<Tariffs />} />
+            <Route path="schedules" element={<Schedules />} />
+            <Route path="operations" element={<Operations />} />
+            <Route path="reports" element={<Reports />} />
+            <Route path="users" element={<Users />} />
+            <Route path="settings" element={<Settings />} />
+          </Route>
+
+          <Route path="/teknisi" element={<TechLayout />}>
+            <Route index element={<TechDashboard />} />
+            <Route path="tugas/:id" element={<TechTask />} />
           </Route>
         </Routes>
       </BrowserRouter>
-    </div>
+    </AuthProvider>
   );
 }
 
