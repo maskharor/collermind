@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import api, { fmtErr, rupiah } from "@/lib/api";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { usePolling } from "@/lib/usePolling";
 
 const BILLING_STATUS = {
   scheduled: { label: "Terjadwal", cls: "bg-slate-100 text-slate-500 border-slate-200" },
@@ -16,11 +17,11 @@ export default function Billings() {
   const [bills, setBills] = useState([]);
   const [filter, setFilter] = useState("");
 
-  useEffect(() => {
-    api.get("/admin/billings", { params: filter ? { status: filter } : {} })
+  const load = () => api.get("/admin/billings", { params: filter ? { status: filter } : {} })
       .then((r) => setBills(r.data))
-      .catch((e) => toast.error(fmtErr(e)));
-  }, [filter]);
+      .catch(() => {});
+  useEffect(() => { load(); }, [filter]); // eslint-disable-line
+  usePolling(load, 15000);
 
   return (
     <div data-testid="admin-billings">

@@ -4,17 +4,18 @@ import { format } from "date-fns";
 import api, { fmtErr, rupiah } from "@/lib/api";
 import { toast } from "sonner";
 import { StatusBadge, ORDER_STATUS } from "@/components/StatusBadge";
+import { usePolling } from "@/lib/usePolling";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 export default function Orders() {
   const [orders, setOrders] = useState([]);
   const [filter, setFilter] = useState("");
 
-  useEffect(() => {
-    api.get("/admin/orders", { params: filter ? { status: filter } : {} })
+  const load = () => api.get("/admin/orders", { params: filter ? { status: filter } : {} })
       .then((r) => setOrders(r.data))
-      .catch((e) => toast.error(fmtErr(e)));
-  }, [filter]);
+      .catch(() => {});
+  useEffect(() => { load(); }, [filter]); // eslint-disable-line
+  usePolling(load, 15000);
 
   return (
     <div data-testid="admin-orders">

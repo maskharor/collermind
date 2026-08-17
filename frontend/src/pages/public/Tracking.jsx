@@ -2,10 +2,11 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
-import { Search, Loader2, Lock, FileText, PenLine, CalendarClock, Receipt, UploadCloud, MapPin, Truck } from "lucide-react";
+import { Search, Loader2, Lock, FileText, CalendarClock, Receipt, UploadCloud, MapPin, Truck, Download, MessageCircle, Repeat } from "lucide-react";
 import { toast } from "sonner";
 import PublicLayout from "@/layouts/PublicLayout";
-import api, { fmtErr, rupiah } from "@/lib/api";
+import api, { API, fmtErr, rupiah } from "@/lib/api";
+import { usePolling } from "@/lib/usePolling";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -23,9 +24,11 @@ export default function Tracking() {
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const [signer, setSigner] = useState("");
-  const [lokasi, setLokasi] = useState({ lantai: "", akses_lokasi: "", titik_indoor: "", titik_outdoor: "", sumber_listrik: "", catatan_lokasi: "" });
-  const [schedReq, setSchedReq] = useState({ tanggal: "", jam: "", catatan: "" });
+  const [kontrakFile, setKontrakFile] = useState(null);
+  const [lokasi, setLokasi] = useState({ ket_indoor: "", ket_outdoor: "", perkiraan_pipa: "" });
+  const [fotoIndoor, setFotoIndoor] = useState(null);
+  const [fotoOutdoor, setFotoOutdoor] = useState(null);
+  const [schedReq, setSchedReq] = useState({ tanggal: "", catatan: "" });
   const [slotTanggal, setSlotTanggal] = useState("");
   const [slots, setSlots] = useState([]);
   const [slotJam, setSlotJam] = useState("");
@@ -71,7 +74,7 @@ export default function Tracking() {
     }
   }
 
-  async function refresh() {
+  async function refresh(silent = true) {
     try {
       const { data } = await api.post("/public/access", { kode: summary.kode, kontak: kontak.trim() });
       setFull(data);
@@ -80,33 +83,61 @@ export default function Tracking() {
     } catch { /* ignore */ }
   }
 
-  async function signContract() {
-    if (signer.trim().length < 3) return toast.error("Ketik nama lengkap sebagai tanda tangan");
+  usePolling(() => {
+    if (!summary) return;
+    api.get(`/public/track/${summary.kode}`).then((s) => setSummary(s.data)).catch(() => {});
+    if (full && kontak.trim()) refresh(true);
+  }, 20000);
+
+  async function uploadKontrak() {
+    if (!kontrakFile) return toast.error("Pilih file PDF kontrak yang sudah ditandatangani");
     setBusy(true);
     try {
-      await api.post("/public/contract/sign", { kode: summary.kode, kontak: kontak.trim(), signer_name: signer.trim() });
-      toast.success("Kontrak berhasil ditandatangani");
+      const fd = new FormData();
+      fd.append("kode", summary.kode);
+      fd.append("kontak", kontak.trim());
+      fd.append("dokumen", kontrakFile);
+      await api.post("/public/contract/upload", fd);
+      toast.success("Kontrak bertanda tangan berhasil diunggah");
+      setKontrakFile(null);
       refresh();
     } catch (e) { toast.error(fmtErr(e)); } finally { setBusy(false); }
   }
 
   async function submitLokasi() {
-    if (!lokasi.lantai || !lokasi.akses_lokasi || !lokasi.titik_indoor || !lokasi.titik_outdoor || !lokasi.sumber_listrik)
-      return toast.error("Lengkapi semua field detail lokasi");
+    if (!fotoIndoor || !fotoOutdoor) return toast.error("Kedua foto (indoor & outdoor) wajib diunggah");
+    if (lokasi.ket_indoor.trim().length < 3 || lokasi.ket_outdoor.trim().length < 3) return toast.error("Keterangan foto wajib diisi");
     setBusy(true);
     try {
-      await api.post("/public/location-detail", { kode: summary.kode, kontak: kontak.trim(), ...lokasi });
+      const fd = new FormData();
+      fd.append("kode", summary.kode);
+      fd.append("kontak", kontak.trim());
+      fd.append("ket_indoor", lokasi.ket_indoor);
+      fd.append("ket_outdoor", lokasi.ket_outdoor);
+      fd.append("perkiraan_pipa", lokasi.perkiraan_pipa ? Number(lokasi.perkiraan_pipa) : 0);
+      fd.append("foto_indoor", fotoIndoor);
+      fd.append("foto_outdoor", fotoOutdoor);
+      await api.post("/public/location-detail", fd);
       toast.success("Detail lokasi tersimpan");
       refresh();
     } catch (e) { toast.error(fmtErr(e)); } finally { setBusy(false); }
   }
 
   async function proposeDelivery() {
-    if (!schedReq.tanggal || !schedReq.jam) return toast.error("Pilih tanggal dan jam usulan");
+    if (!schedReq.tanggal) return toast.error("Pilih tanggal usulan pengiriman");
     setBusy(true);
     try {
       await api.post("/public/schedule-request", { kode: summary.kode, kontak: kontak.trim(), jenis: "delivery", ...schedReq });
       toast.success("Usulan jadwal pengiriman terkirim. Admin akan mengonfirmasi.");
+      refresh();
+    } catch (e) { toast.error(fmtErr(e)); } finally { setBusy(false); }
+  }
+
+  async function confirmExtend(lanjut) {
+    setBusy(true);
+    try {
+      await api.post("/public/extend", { kode: summary.kode, kontak: kontak.trim(), lanjut });
+      toast.success(lanjut ? "Perpanjangan dikonfirmasi — tagihan bulanan berlanjut otomatis" : "Dikonfirmasi — sewa berakhir sesuai jadwal");
       refresh();
     } catch (e) { toast.error(fmtErr(e)); } finally { setBusy(false); }
   }
@@ -260,13 +291,24 @@ export default function Tracking() {
                       </div>
                     </div>
                     {full.contract.status === "signed" ? (
-                      <p className="text-xs text-slate-500 mt-3">Ditandatangani oleh <b>{full.contract.signer_name}</b> pada {fmtDT(full.contract.signed_at)}</p>
+                      <div className="mt-3 space-y-2">
+                        <p className="text-xs text-slate-500">Ditandatangani oleh <b>{full.contract.signer_name}</b> pada {fmtDT(full.contract.signed_at)}</p>
+                        <p className="text-xs text-emerald-600 font-semibold" data-testid="contract-pdf-note">Kontrak PDF bertanda tangan telah diterima dan dapat dilihat admin pada halaman rental order.</p>
+                      </div>
                     ) : (
                       <div className="mt-4 space-y-3">
-                        <Label>Ketik nama lengkap sebagai tanda tangan digital</Label>
-                        <Input data-testid="input-signer" value={signer} onChange={(e) => setSigner(e.target.value)} placeholder="Nama lengkap sesuai KTP" className="h-12" />
-                        <Button data-testid="btn-sign-contract" onClick={signContract} disabled={busy} className="rounded-full bg-[#0047AB] hover:bg-[#003a8c]">
-                          {busy ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <PenLine className="w-4 h-4 mr-2" />} Tanda Tangani Kontrak
+                        <p className="text-sm text-slate-500">Unduh dokumen kontrak yang sudah terisi data Anda, tanda tangani (digital/manual), lalu unggah kembali dalam bentuk PDF.</p>
+                        <a data-testid="btn-download-contract" href={`${API}/public/contract/download?kode=${encodeURIComponent(summary.kode)}&kontak=${encodeURIComponent(kontak.trim())}`}
+                          className="inline-flex items-center gap-2 rounded-full border-2 border-[#0047AB] text-[#0047AB] px-6 py-2.5 text-sm font-semibold hover:bg-[#0047AB] hover:text-white transition-colors">
+                          <Download className="w-4 h-4" /> Unduh Kontrak (DOCX)
+                        </a>
+                        <label data-testid="kontrak-upload-area" className="flex items-center justify-center gap-3 border-2 border-dashed border-slate-300 rounded-2xl p-6 cursor-pointer hover:border-[#0047AB] hover:bg-slate-50 transition-colors">
+                          <UploadCloud className="w-6 h-6 text-slate-400" />
+                          <span className="text-sm text-slate-600 font-medium">{kontrakFile ? kontrakFile.name : "Unggah kontrak bertanda tangan (PDF)"}</span>
+                          <input data-testid="input-kontrak-pdf" type="file" accept="application/pdf" className="hidden" onChange={(e) => setKontrakFile(e.target.files[0] || null)} />
+                        </label>
+                        <Button data-testid="btn-upload-contract" onClick={uploadKontrak} disabled={busy || !kontrakFile} className="rounded-full bg-[#0047AB] hover:bg-[#003a8c]">
+                          {busy ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null} Kirim Kontrak Bertanda Tangan
                         </Button>
                       </div>
                     )}
@@ -276,14 +318,31 @@ export default function Tracking() {
                 {full.contract_status === "signed" && !full.lokasi_detail && full.status === "verified" && (
                   <div className="border border-slate-200 rounded-2xl p-6" data-testid="location-form-section">
                     <p className="font-heading font-bold text-slate-900 flex items-center gap-2 mb-2"><MapPin className="w-5 h-5 text-[#0047AB]" /> Form Lanjutan — Detail Lokasi Pemasangan</p>
-                    <div className="grid sm:grid-cols-2 gap-4 mt-4">
-                      <div><Label>Lantai *</Label><Input data-testid="loc-lantai" value={lokasi.lantai} onChange={(e) => setLokasi({ ...lokasi, lantai: e.target.value })} className="mt-1.5" placeholder="mis. Lantai 2" /></div>
-                      <div><Label>Akses Lokasi *</Label><Input data-testid="loc-akses" value={lokasi.akses_lokasi} onChange={(e) => setLokasi({ ...lokasi, akses_lokasi: e.target.value })} className="mt-1.5" placeholder="mis. tangga/lift, parkir" /></div>
-                      <div><Label>Titik Unit Indoor *</Label><Input data-testid="loc-indoor" value={lokasi.titik_indoor} onChange={(e) => setLokasi({ ...lokasi, titik_indoor: e.target.value })} className="mt-1.5" placeholder="mis. dinding kamar atas jendela" /></div>
-                      <div><Label>Titik Unit Outdoor *</Label><Input data-testid="loc-outdoor" value={lokasi.titik_outdoor} onChange={(e) => setLokasi({ ...lokasi, titik_outdoor: e.target.value })} className="mt-1.5" placeholder="mis. balkon samping" /></div>
-                      <div className="sm:col-span-2"><Label>Sumber Listrik *</Label><Input data-testid="loc-listrik" value={lokasi.sumber_listrik} onChange={(e) => setLokasi({ ...lokasi, sumber_listrik: e.target.value })} className="mt-1.5" placeholder="mis. stop kontak 2m dari titik indoor" /></div>
+                    <div className="space-y-4 mt-4">
+                      <div>
+                        <Label className="text-xs font-bold uppercase tracking-[0.15em] text-slate-500">Foto rencana AC indoor + sumber listrik terdekat *</Label>
+                        <label data-testid="foto-indoor-area" className="mt-2 flex items-center justify-center gap-3 border-2 border-dashed border-slate-300 rounded-2xl p-5 cursor-pointer hover:border-[#0047AB] hover:bg-slate-50 transition-colors">
+                          <UploadCloud className="w-6 h-6 text-slate-400" />
+                          <span className="text-sm text-slate-600 font-medium">{fotoIndoor ? fotoIndoor.name : "Ambil / pilih foto indoor"}</span>
+                          <input data-testid="input-foto-indoor" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" className="hidden" onChange={(e) => setFotoIndoor(e.target.files[0] || null)} />
+                        </label>
+                        <Input data-testid="ket-indoor" value={lokasi.ket_indoor} onChange={(e) => setLokasi({ ...lokasi, ket_indoor: e.target.value })} className="mt-2" placeholder="Keterangan: posisi indoor & jarak stop kontak terdekat *" />
+                      </div>
+                      <div>
+                        <Label className="text-xs font-bold uppercase tracking-[0.15em] text-slate-500">Foto rencana AC outdoor dipasang di mana *</Label>
+                        <label data-testid="foto-outdoor-area" className="mt-2 flex items-center justify-center gap-3 border-2 border-dashed border-slate-300 rounded-2xl p-5 cursor-pointer hover:border-[#0047AB] hover:bg-slate-50 transition-colors">
+                          <UploadCloud className="w-6 h-6 text-slate-400" />
+                          <span className="text-sm text-slate-600 font-medium">{fotoOutdoor ? fotoOutdoor.name : "Ambil / pilih foto lokasi outdoor"}</span>
+                          <input data-testid="input-foto-outdoor" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" className="hidden" onChange={(e) => setFotoOutdoor(e.target.files[0] || null)} />
+                        </label>
+                        <Input data-testid="ket-outdoor" value={lokasi.ket_outdoor} onChange={(e) => setLokasi({ ...lokasi, ket_outdoor: e.target.value })} className="mt-2" placeholder="Keterangan: outdoor dipasang di mana *" />
+                      </div>
+                      <div>
+                        <Label>Perkiraan pipa yang dibutuhkan (meter)</Label>
+                        <Input type="number" min="0" step="0.5" data-testid="input-perkiraan-pipa" value={lokasi.perkiraan_pipa} onChange={(e) => setLokasi({ ...lokasi, perkiraan_pipa: e.target.value })} className="mt-1.5" placeholder="mis. 4" />
+                        <p className="text-xs text-slate-400 mt-1">Hanya perkiraan — biaya extra pipa final dihitung dari pipa terpakai saat instalasi.</p>
+                      </div>
                     </div>
-                    <Textarea data-testid="loc-catatan" value={lokasi.catatan_lokasi} onChange={(e) => setLokasi({ ...lokasi, catatan_lokasi: e.target.value })} placeholder="Catatan tambahan (opsional)" rows={2} className="mt-4" />
                     <Button data-testid="btn-submit-lokasi" onClick={submitLokasi} disabled={busy} className="mt-4 rounded-full bg-[#0047AB] hover:bg-[#003a8c]">
                       {busy ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null} Simpan Detail Lokasi
                     </Button>
@@ -299,11 +358,9 @@ export default function Tracking() {
                       </p>
                     ) : (
                       <div className="space-y-3">
-                        <p className="text-sm text-slate-500">Detail lokasi tersimpan. Usulkan tanggal & jam pengiriman unit.</p>
-                        <div className="grid grid-cols-2 gap-3">
-                          <Input type="date" data-testid="req-tanggal" value={schedReq.tanggal} onChange={(e) => setSchedReq({ ...schedReq, tanggal: e.target.value })} className="h-12" />
-                          <Input type="time" data-testid="req-jam" value={schedReq.jam} onChange={(e) => setSchedReq({ ...schedReq, jam: e.target.value })} className="h-12" />
-                        </div>
+                        <p className="text-sm text-slate-500">Detail lokasi tersimpan. Usulkan tanggal pengiriman unit.</p>
+                        <p className="text-sm bg-blue-50 border border-blue-200 text-blue-800 rounded-xl p-3">Estimasi pengiriman ±3 hari setelah jadwal dikonfirmasi admin.</p>
+                        <div><Label>Tanggal Usulan Pengiriman</Label><Input type="date" data-testid="req-tanggal" value={schedReq.tanggal} onChange={(e) => setSchedReq({ ...schedReq, tanggal: e.target.value })} className="mt-1.5 h-12" /></div>
                         <Textarea data-testid="req-catatan" value={schedReq.catatan} onChange={(e) => setSchedReq({ ...schedReq, catatan: e.target.value })} placeholder="Catatan (opsional)" rows={2} />
                         <Button data-testid="btn-propose-delivery" onClick={proposeDelivery} disabled={busy} className="rounded-full bg-[#0047AB] hover:bg-[#003a8c]">Kirim Usulan Pengiriman</Button>
                       </div>
@@ -416,6 +473,25 @@ export default function Tracking() {
                   </div>
                 )}
 
+                {["active", "maintenance"].includes(full.status) && (
+                  <div className="border border-slate-200 rounded-2xl p-6" data-testid="extension-section">
+                    <p className="font-heading font-bold text-slate-900 flex items-center gap-2 mb-2"><Repeat className="w-5 h-5 text-[#0047AB]" /> Perpanjangan Sewa</p>
+                    {full.perpanjangan === "open_ended" ? (
+                      <p className="text-sm bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-xl p-3" data-testid="extension-active">Sewa berlanjut otomatis — tagihan bulanan akan terus terbit setiap bulan sampai Anda mengakhiri sewa.</p>
+                    ) : full.perpanjangan === "berakhir_sesuai_jadwal" ? (
+                      <p className="text-sm bg-slate-50 border border-slate-200 text-slate-600 rounded-xl p-3" data-testid="extension-ended">Anda memilih sewa berakhir sesuai jadwal. Hubungi admin bila berubah pikiran.</p>
+                    ) : (
+                      <>
+                        <p className="text-sm text-slate-500">Masa sewa Anda {full.durasi_sewa} bulan. Ingin melanjutkan sewa setelahnya? Tagihan bulanan akan terjadwal otomatis tanpa batas durasi.</p>
+                        <div className="flex gap-3 mt-4">
+                          <Button data-testid="btn-extend-yes" onClick={() => confirmExtend(true)} disabled={busy} className="rounded-full bg-emerald-600 hover:bg-emerald-700">Ya, Lanjutkan Sewa</Button>
+                          <Button data-testid="btn-extend-no" variant="outline" onClick={() => confirmExtend(false)} disabled={busy} className="rounded-full">Tidak, Berakhir Sesuai Jadwal</Button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+
                 {full.payments.length > 0 && (
                   <div className="border border-slate-200 rounded-2xl p-6" data-testid="payment-history">
                     <p className="font-heading font-bold text-slate-900 mb-4">Riwayat Pembayaran</p>
@@ -434,6 +510,18 @@ export default function Tracking() {
                 )}
               </div>
             )}
+            <div className="border border-slate-200 rounded-2xl p-6" data-testid="contact-admin">
+              <p className="font-heading font-bold text-slate-900 mb-2 flex items-center gap-2"><MessageCircle className="w-5 h-5 text-emerald-600" /> Ada yang perlu ditanyakan?</p>
+              <p className="text-sm text-slate-500 mb-4">Hubungi admin kami via WhatsApp:</p>
+              <div className="flex gap-3 flex-wrap">
+                <a data-testid="wa-admin-1" href="https://wa.me/6285695965790" target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-full bg-emerald-600 text-white px-5 py-2.5 text-sm font-semibold hover:bg-emerald-700 transition-colors">
+                  <MessageCircle className="w-4 h-4" /> Admin 1 — 0856-9596-5790
+                </a>
+                <a data-testid="wa-admin-2" href="https://wa.me/6281232576420" target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-full bg-emerald-600 text-white px-5 py-2.5 text-sm font-semibold hover:bg-emerald-700 transition-colors">
+                  <MessageCircle className="w-4 h-4" /> Admin 2 — 0812-3257-6420
+                </a>
+              </div>
+            </div>
           </div>
         )}
       </div>

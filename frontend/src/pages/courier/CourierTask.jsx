@@ -29,7 +29,6 @@ export default function CourierTask() {
   const [kondisi, setKondisi] = useState("");
   const [catatan, setCatatan] = useState("");
   const [fotoSurat, setFotoSurat] = useState(null);
-  const [fotoTtd, setFotoTtd] = useState(null);
   const [fotoSerah, setFotoSerah] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -42,14 +41,13 @@ export default function CourierTask() {
   const isDone = schedule.status === "done";
 
   async function submit() {
-    if (!fotoSurat || !fotoTtd || !fotoSerah) return toast.error("Ketiga foto bukti wajib diunggah");
+    if (!fotoSurat || !fotoSerah) return toast.error("Kedua foto bukti wajib diunggah");
     setBusy(true);
     try {
       const fd = new FormData();
       fd.append("kondisi", kondisi);
       fd.append("catatan", catatan);
       fd.append("foto_surat_jalan", fotoSurat);
-      fd.append("foto_ttd_penerima", fotoTtd);
       fd.append("foto_serah_terima", fotoSerah);
       await api.post(`/courier/schedules/${id}/submit`, fd);
       toast.success("Bukti serah terima terkirim");
@@ -100,8 +98,7 @@ export default function CourierTask() {
         <section className="bg-white border border-slate-200 rounded-2xl p-5 mt-4 mb-10" data-testid="delivery-form">
           <h2 className="font-heading font-bold text-slate-800 mb-4">Bukti Serah Terima</h2>
           <div className="space-y-4">
-            <PhotoField label="Foto Surat Tanda Terima" testid="foto-surat-jalan" file={fotoSurat} onChange={setFotoSurat} />
-            <PhotoField label="Foto Tanda Tangan Penerima" testid="foto-ttd-penerima" file={fotoTtd} onChange={setFotoTtd} />
+            <PhotoField label="Foto Surat Tanda Terima (sudah ditandatangani)" testid="foto-surat-jalan" file={fotoSurat} onChange={setFotoSurat} />
             <PhotoField label="Foto Customer dengan Unit AC" testid="foto-serah-terima" file={fotoSerah} onChange={setFotoSerah} />
             <div><Label>Kondisi Unit</Label><Input data-testid="delivery-kondisi" value={kondisi} onChange={(e) => setKondisi(e.target.value)} className="mt-1.5 h-12" placeholder="Contoh: baik, lengkap, segel" /></div>
             <div><Label>Catatan</Label><Textarea data-testid="delivery-catatan" value={catatan} onChange={(e) => setCatatan(e.target.value)} rows={3} className="mt-1.5" /></div>

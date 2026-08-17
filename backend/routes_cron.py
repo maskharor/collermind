@@ -78,4 +78,40 @@ async def run_billing_cycle(run_id: str):
                 logger.error("Notify reminder gagal untuk invoice %s: %s", inv["id"], e)
             stats["reminders"] += 1
 
+    # 3. Tagihan open-ended (perpanjangan tanpa batas durasi)
+    from core import add_months, sewa_bulanan, get_bank_accounts, detect_region, new_id
+    extended_orders = await db.rental_orders.find(
+        {"perpanjangan": "open_ended", "status": {"$in": ["active", "maintenance"]}, "deleted_at": None}, {"_id": 0}
+    ).to_list(500)
+    for order in extended_orders:
+        try:
+            has_future = await db.invoices.find_one({"order_id": order["id"], "jenis": "monthly", "bill_date": {"$gt": today.isoformat()}})
+            if has_future:
+                continue
+            last = await db.invoices.find({"order_id": order["id"], "jenis": "monthly"}, {"_id": 0}).sort("periode", -1).to_list(1)
+            if last:
+                next_periode = last[0]["periode"] + 1
+                bill_date = date.fromisoformat(last[0]["bill_date"])
+                next_bill = add_months(bill_date, 1)
+            else:
+                start = date.fromisoformat(order["tanggal_mulai"])
+                next_periode = 2
+                next_bill = add_months(start, 1)
+            customer = await db.customers.find_one({"id": order["customer_id"]}, {"_id": 0})
+            sewa = sewa_bulanan(order)
+            region_key, region_label = detect_region((customer or {}).get("alamat_pemasangan", ""))
+            accounts = await get_bank_accounts()
+            await db.invoices.insert_one({
+                "id": new_id(), "nomor": f"INV-{order['kode']}-B{next_periode:02d}",
+                "order_id": order["id"], "kode": order["kode"], "jenis": "monthly", "periode": next_periode,
+                "items": [{"label": f"Sewa bulan ke-{next_periode} (perpanjangan)", "amount": sewa}],
+                "total": sewa, "status": "scheduled",
+                "rekening": accounts.get(region_key) or accounts["default"], "region": region_label,
+                "bill_date": next_bill.isoformat(), "due_date": (next_bill + timedelta(days=7)).isoformat(),
+                "issued_at": None, "created_at": now_iso(), "updated_at": now_iso(),
+            })
+            stats["issued"] += 0
+        except Exception as e:
+            logger.error("Open-ended billing gagal untuk order %s: %s", order.get("kode"), e)
+
     logger.info("Billing cycle %s done: %s", run_id, stats)

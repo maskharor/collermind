@@ -15,7 +15,8 @@ export default function CourierLayout() {
       <header className="sticky top-0 z-40 bg-[#0047AB] text-white shadow-md">
         <div className="max-w-3xl mx-auto px-4 h-14 flex items-center justify-between">
           <Link to="/kurir" data-testid="courier-logo" className="flex items-center gap-2 font-heading font-extrabold">
-            <Truck className="w-5 h-5 text-cyan-300" /> CollerMind Kurir
+            <img src="/assets/logo.jpeg" alt="CollerMind" className="h-8 w-auto object-contain rounded bg-white px-1.5 py-0.5" />
+            <span className="text-sm font-bold">Kurir</span>
           </Link>
           <div className="flex items-center gap-3">
             <span className="text-sm text-blue-100 hidden sm:block" data-testid="courier-name">{user.name}</span>

@@ -39,9 +39,8 @@ export default function AdminLayout() {
   return (
     <div className="min-h-screen bg-slate-50" data-testid="admin-layout">
       <aside className="hidden md:flex fixed inset-y-0 left-0 w-64 bg-white border-r border-slate-200 flex-col z-40">
-        <div className="h-16 flex items-center gap-2 px-6 border-b border-slate-100 font-heading font-extrabold text-slate-900">
-          <span className="w-8 h-8 rounded-lg bg-[#0047AB] text-white flex items-center justify-center"><Snowflake className="w-4 h-4" /></span>
-          Coller<span className="text-cyan-500">Mind</span>
+        <div className="h-16 flex items-center px-6 border-b border-slate-100 bg-white">
+          <img src="/assets/logo.jpeg" alt="CollerMind" className="h-9 w-auto object-contain rounded-lg" />
         </div>
         <nav className="flex-1 p-4 space-y-1 overflow-y-auto"><NavItems /></nav>
         <div className="p-4 border-t border-slate-100">

@@ -4,14 +4,15 @@ import { motion } from "framer-motion";
 import { Clock, Snowflake, Banknote, CalendarDays } from "lucide-react";
 import api, { fmtErr, rupiah } from "@/lib/api";
 import { toast } from "sonner";
+import { usePolling } from "@/lib/usePolling";
 import { StatusBadge, JENIS_KEGIATAN } from "@/components/StatusBadge";
 
 export default function Dashboard() {
   const [stats, setStats] = useState(null);
 
-  useEffect(() => {
-    api.get("/admin/stats").then((r) => setStats(r.data)).catch((e) => toast.error(fmtErr(e)));
-  }, []);
+  const load = () => api.get("/admin/stats").then((r) => setStats(r.data)).catch(() => {});
+  useEffect(() => { load(); }, []); // eslint-disable-line
+  usePolling(load, 15000);
 
   if (!stats) return <p className="text-slate-400">Memuat dashboard...</p>;
 

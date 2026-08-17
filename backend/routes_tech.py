@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, List
 
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, Request
 
 from core import (
     db, now_iso, new_id, require_role, set_order_status, set_units_status,
@@ -54,14 +54,16 @@ async def submit_work(
     kondisi: str = Form(""),
     jenis_maintenance: str = Form(""),
     denda: float = Form(0),
-    total_pipa: float = Form(0),
+    pipa_dibawa: float = Form(0),
+    pipa_terpakai: float = Form(0),
     ducttape_terpakai: str = Form(""),
     kabel_terpakai: str = Form(""),
     helper: str = Form(""),
-    koordinat: str = Form(""),
+    koordinat_sesuai: str = Form(""),
     edukasi_customer: str = Form(""),
     catatan: str = Form(""),
     foto: Optional[UploadFile] = File(None),
+    request: Request = None,
     user=Tech,
 ):
     s = await db.schedules.find_one({"id": sid, "technician_id": user["id"]}, {"_id": 0})
@@ -80,6 +82,16 @@ async def submit_work(
         "id": new_id(), "rental_order_id": order["id"], "technician_id": user["id"],
         "tanggal": now_iso(), "foto": foto_path, "catatan": catatan, "created_at": now_iso(),
     }
+    if jenis == "installation":
+        from storage import MAX_DOC_PHOTO_SIZE
+        form_data = await request.form()
+        foto_files = [f for f in form_data.getlist("fotos") if getattr(f, "filename", None)]
+        paths = []
+        for f in foto_files:
+            paths.append(await save_image(db, f, "pekerjaan", max_size=MAX_DOC_PHOTO_SIZE))
+        base["foto_list"] = paths
+        if paths and not foto_path:
+            base["foto"] = paths[0]
     unit_ids = order_unit_ids(order)
 
     if jenis == "delivery":
@@ -92,18 +104,22 @@ async def submit_work(
     elif jenis == "installation":
         if order["status"] not in ("delivered", "scheduled"):
             raise HTTPException(status_code=400, detail=f"Order berstatus {order['status']}, belum siap instalasi")
-        if total_pipa <= 0:
-            raise HTTPException(status_code=400, detail="Panjang pipa aktual wajib diisi (meter)")
-        extra_meter, extra_cost = hitung_extra_pipa(total_pipa)
+        if pipa_terpakai <= 0:
+            raise HTTPException(status_code=400, detail="Panjang pipa terpakai wajib diisi (meter)")
+        extra_meter, extra_cost = hitung_extra_pipa(pipa_terpakai)
+        foto_paths = list(base.pop("foto_list", []))
         await db.installations.insert_one({
             **base, "hasil": hasil or "berhasil", "kondisi_instalasi": kondisi,
-            "total_pipa_meter": total_pipa, "extra_pipa_meter": extra_meter, "biaya_extra_pipa": extra_cost,
+            "pipa_dibawa_meter": pipa_dibawa, "pipa_terpakai_meter": pipa_terpakai,
+            "total_pipa_meter": pipa_terpakai,
+            "extra_pipa_meter": extra_meter, "biaya_extra_pipa": extra_cost,
             "ducttape_terpakai": ducttape_terpakai, "kabel_terpakai": kabel_terpakai,
-            "helper": helper, "koordinat": koordinat, "edukasi_customer": edukasi_customer,
+            "helper": helper, "koordinat_sesuai": koordinat_sesuai, "edukasi_customer": edukasi_customer,
+            "fotos": foto_paths,
         })
         await set_units_status(unit_ids, "rented")
         await set_order_status(order["id"], "installed", user["name"], catatan)
-        invoice = await create_invoice_for_order(order, customer or {}, total_pipa)
+        invoice = await create_invoice_for_order(order, customer or {}, pipa_terpakai)
         await db.rental_orders.update_one(
             {"id": order["id"]},
             {"$set": {"total_biaya": invoice["total"], "updated_at": now_iso()},

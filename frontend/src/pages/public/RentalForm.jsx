@@ -26,10 +26,15 @@ export default function RentalForm() {
 
   const [form, setForm] = useState({
     nama: "", email: "", no_hp: "",
-    alamat_ktp: "", alamat_pemasangan: "", status_hunian: "", jenis_ruangan: "",
+    alamat_ktp: "", provinsi: "", kota_kab: "", kecamatan: "", kelurahan: "", detail_alamat: "",
+    status_hunian: "", jenis_ruangan: "",
     durasi_sewa: 3, catatan: "",
     nama_pj_lokasi: "", no_hp_pj_lokasi: "",
   });
+  const [provList, setProvList] = useState([]);
+  const [kotaList, setKotaList] = useState([]);
+  const [kecList, setKecList] = useState([]);
+  const [kelList, setKelList] = useState([]);
   const [tanggalMulai, setTanggalMulai] = useState(null);
   const [qty, setQty] = useState({});
   const [ktp, setKtp] = useState(null);
@@ -37,7 +42,31 @@ export default function RentalForm() {
 
   useEffect(() => {
     api.get("/public/tariffs").then((r) => setTariffs(r.data)).catch((e) => toast.error(fmtErr(e)));
+    api.get("/public/wilayah/provinsi").then((r) => setProvList(r.data)).catch(() => toast.error("Gagal memuat data provinsi"));
   }, []);
+
+  function pickProv(id) {
+    const p = provList.find((x) => x.id === id);
+    setForm({ ...form, provinsi: p?.name || "", kota_kab: "", kecamatan: "", kelurahan: "" });
+    setKotaList([]); setKecList([]); setKelList([]);
+    if (id) api.get(`/public/wilayah/kota/${id}`).then((r) => setKotaList(r.data)).catch(() => toast.error("Gagal memuat kota/kabupaten"));
+  }
+  function pickKota(id) {
+    const k = kotaList.find((x) => x.id === id);
+    setForm({ ...form, kota_kab: k?.name || "", kecamatan: "", kelurahan: "" });
+    setKecList([]); setKelList([]);
+    if (id) api.get(`/public/wilayah/kecamatan/${id}`).then((r) => setKecList(r.data)).catch(() => toast.error("Gagal memuat kecamatan"));
+  }
+  function pickKec(id) {
+    const k = kecList.find((x) => x.id === id);
+    setForm({ ...form, kecamatan: k?.name || "", kelurahan: "" });
+    setKelList([]);
+    if (id) api.get(`/public/wilayah/kelurahan/${id}`).then((r) => setKelList(r.data)).catch(() => toast.error("Gagal memuat kelurahan"));
+  }
+  function pickKel(id) {
+    const k = kelList.find((x) => x.id === id);
+    setForm({ ...form, kelurahan: k?.name || "" });
+  }
 
   const sewaBulanan = useMemo(() => tariffs.reduce((sum, t) => sum + (qty[t.id] || 0) * t.harga_per_bulan, 0), [tariffs, qty]);
   const totalUnits = useMemo(() => Object.values(qty).reduce((a, b) => a + b, 0), [qty]);
@@ -52,7 +81,8 @@ export default function RentalForm() {
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(form.email)) return "Email tidak valid";
     }
     if (step === 1) {
-      if (form.alamat_pemasangan.trim().length < 10) return "Alamat pemasangan wajib diisi lengkap";
+      if (!form.provinsi || !form.kota_kab || !form.kecamatan || !form.kelurahan) return "Lengkapi provinsi, kota/kabupaten, kecamatan, dan kelurahan";
+      if (form.detail_alamat.trim().length < 5) return "Detail alamat wajib diisi";
       if (!form.status_hunian) return "Pilih status hunian";
       if (!form.jenis_ruangan) return "Pilih jenis ruangan";
     }
@@ -161,7 +191,37 @@ export default function RentalForm() {
         {step === 1 && (
           <div className="space-y-5" data-testid="step-1">
             <h2 className="font-heading font-bold text-lg text-slate-800">Section 2 — Data Lokasi Pemasangan</h2>
-            <div><Label htmlFor="alamat_pemasangan">Alamat Pemasangan AC *</Label><Textarea id="alamat_pemasangan" data-testid="input-alamat-pemasangan" value={form.alamat_pemasangan} onChange={set("alamat_pemasangan")} rows={3} className="mt-1.5" placeholder="Tulis lengkap beserta kota (mis. Jakarta Selatan, Depok, Tangerang Selatan)" /></div>
+            <div className="grid sm:grid-cols-2 gap-5">
+              <div>
+                <Label>Provinsi *</Label>
+                <Select value={provList.find((x) => x.name === form.provinsi)?.id || ""} onValueChange={pickProv}>
+                  <SelectTrigger data-testid="select-provinsi" className="mt-1.5"><SelectValue placeholder="Pilih provinsi" /></SelectTrigger>
+                  <SelectContent>{provList.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Kota / Kabupaten *</Label>
+                <Select value={kotaList.find((x) => x.name === form.kota_kab)?.id || ""} onValueChange={pickKota} disabled={!form.provinsi}>
+                  <SelectTrigger data-testid="select-kota" className="mt-1.5"><SelectValue placeholder="Pilih kota/kabupaten" /></SelectTrigger>
+                  <SelectContent>{kotaList.map((k) => <SelectItem key={k.id} value={k.id}>{k.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Kecamatan *</Label>
+                <Select value={kecList.find((x) => x.name === form.kecamatan)?.id || ""} onValueChange={pickKec} disabled={!form.kota_kab}>
+                  <SelectTrigger data-testid="select-kecamatan" className="mt-1.5"><SelectValue placeholder="Pilih kecamatan" /></SelectTrigger>
+                  <SelectContent>{kecList.map((k) => <SelectItem key={k.id} value={k.id}>{k.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Kelurahan *</Label>
+                <Select value={kelList.find((x) => x.name === form.kelurahan)?.id || ""} onValueChange={pickKel} disabled={!form.kecamatan}>
+                  <SelectTrigger data-testid="select-kelurahan" className="mt-1.5"><SelectValue placeholder="Pilih kelurahan" /></SelectTrigger>
+                  <SelectContent>{kelList.map((k) => <SelectItem key={k.id} value={k.id}>{k.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div><Label htmlFor="detail_alamat">Detail Alamat (jalan, nomor, patokan) *</Label><Textarea id="detail_alamat" data-testid="input-detail-alamat" value={form.detail_alamat} onChange={set("detail_alamat")} rows={2} className="mt-1.5" placeholder="mis. Jl. Flamboyan No. 12, RT 03/RW 05" /></div>
             <div className="grid sm:grid-cols-2 gap-5">
               <div>
                 <Label>Status Hunian *</Label>
@@ -283,7 +343,7 @@ export default function RentalForm() {
             <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 space-y-2 text-sm" data-testid="review-summary">
               <p><span className="text-slate-500">Nama:</span> {form.nama}</p>
               <p><span className="text-slate-500">Kontak:</span> {form.no_hp} · {form.email}</p>
-              <p><span className="text-slate-500">Lokasi:</span> {form.alamat_pemasangan} ({form.status_hunian} · {form.jenis_ruangan})</p>
+              <p><span className="text-slate-500">Lokasi:</span> {form.detail_alamat}, Kel. {form.kelurahan}, Kec. {form.kecamatan}, {form.kota_kab}, {form.provinsi} ({form.status_hunian} · {form.jenis_ruangan})</p>
               <p><span className="text-slate-500">Unit:</span> {tariffs.filter((t) => qty[t.id] > 0).map((t) => `${t.nama} ×${qty[t.id]}`).join(", ") || "-"}</p>
               <p><span className="text-slate-500">Durasi:</span> {form.durasi_sewa} bulan · mulai {tanggalMulai ? format(tanggalMulai, "dd MMM yyyy", { locale: idLocale }) : "-"}</p>
               <div className="pt-3 mt-3 border-t border-slate-200 space-y-1.5">

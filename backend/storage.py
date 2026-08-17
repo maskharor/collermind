@@ -2,6 +2,7 @@ import os
 import uuid
 import logging
 import requests
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -52,18 +53,17 @@ def make_upload_path(folder: str, filename: str) -> str:
 
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 MAX_FILE_SIZE = 5 * 1024 * 1024
+MAX_DOC_PHOTO_SIZE = 2 * 1024 * 1024
 
 
-async def save_image(db, file, folder: str) -> str:
+async def save_image(db, file, folder: str, max_size: int = MAX_FILE_SIZE) -> str:
+    from fastapi import HTTPException
     if file.content_type not in ALLOWED_IMAGE_TYPES:
-        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="File harus berupa gambar (JPG/PNG/WEBP)")
     data = await file.read()
-    if len(data) > MAX_FILE_SIZE:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="Ukuran file maksimal 5MB")
+    if len(data) > max_size:
+        raise HTTPException(status_code=400, detail=f"Ukuran file maksimal {max_size // (1024 * 1024)}MB")
     if not data:
-        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="File kosong")
     path = make_upload_path(folder, file.filename or "file")
     result = put_object(path, data, file.content_type)
@@ -74,6 +74,29 @@ async def save_image(db, file, folder: str) -> str:
         "content_type": file.content_type,
         "size": result["size"],
         "is_deleted": False,
-        "created_at": __import__("core").now_iso() if False else __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return result["path"]
+
+
+async def save_pdf(db, file, folder: str) -> str:
+    from fastapi import HTTPException
+    if file.content_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="File harus berupa PDF")
+    data = await file.read()
+    if len(data) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="Ukuran file maksimal 5MB")
+    if not data:
+        raise HTTPException(status_code=400, detail="File kosong")
+    path = make_upload_path(folder, (file.filename or "dokumen").rsplit(".", 1)[0] + ".pdf")
+    result = put_object(path, data, "application/pdf")
+    await db.files.insert_one({
+        "id": str(uuid.uuid4()),
+        "storage_path": result["path"],
+        "original_filename": file.filename,
+        "content_type": "application/pdf",
+        "size": result["size"],
+        "is_deleted": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
     })
     return result["path"]

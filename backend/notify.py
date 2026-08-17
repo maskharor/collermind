@@ -206,6 +206,14 @@ def _build(event: str, order: dict, customer: dict, extra: dict | None):
                            f"<p>Halo {escape(nama)}, pengingat ({escape(kind)}): tagihan {escape(inv.get('nomor',''))} "
                            f"sebesar <strong>{escape(rupiah(inv.get('total',0)))}</strong> jatuh tempo {escape(inv.get('due_date',''))}.</p>", kode)
         return f"Pengingat Jatuh Tempo — {inv.get('nomor','')}", html, wa
+    if event == "extension_confirmed":
+        lanjut = extra.get("lanjut", True)
+        wa = (f"*CollerMind*\n\nHalo {nama}, konfirmasi perpanjangan sewa untuk pesanan *{kode}* telah kami terima: "
+              f"*{'Lanjut menyewa (tagihan bulanan berlanjut otomatis)' if lanjut else 'Sewa berakhir sesuai jadwal'}*. Terima kasih!")
+        html = _email_html("Konfirmasi Perpanjangan Sewa",
+                           f"<p>Halo {escape(nama)}, konfirmasi Anda untuk pesanan {escape(kode)} telah kami terima: "
+                           f"<strong>{'Lanjut menyewa — tagihan bulanan berlanjut otomatis.' if lanjut else 'Sewa berakhir sesuai jadwal.'}</strong></p>", kode)
+        return f"Konfirmasi Perpanjangan Sewa — {kode}", html, wa
     return None
 
 

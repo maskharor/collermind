@@ -14,7 +14,8 @@ export default function TechTask() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [data, setData] = useState(null);
-  const [form, setForm] = useState({ hasil: "", kondisi: "", jenis_maintenance: "rutin", denda: "", total_pipa: "", ducttape: "", kabel: "", helper: "", koordinat: "", edukasi: "", catatan: "" });
+  const [form, setForm] = useState({ hasil: "", kondisi: "", jenis_maintenance: "rutin", denda: "", pipa_dibawa: "", pipa_terpakai: "", ducttape: "", kabel: "", helper: "", koordinat: "", edukasi: "", catatan: "" });
+  const [fotosList, setFotosList] = useState([]);
   const [foto, setFoto] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -28,7 +29,7 @@ export default function TechTask() {
   const isDone = schedule.status === "done";
 
   async function submit() {
-    if (jenis === "installation" && (!form.total_pipa || Number(form.total_pipa) <= 0)) return toast.error("Panjang pipa aktual wajib diisi");
+    if (jenis === "installation" && (!form.pipa_terpakai || Number(form.pipa_terpakai) <= 0)) return toast.error("Panjang pipa terpakai wajib diisi");
     setBusy(true);
     try {
       const fd = new FormData();
@@ -36,12 +37,14 @@ export default function TechTask() {
       fd.append("kondisi", form.kondisi);
       fd.append("jenis_maintenance", form.jenis_maintenance);
       fd.append("denda", form.denda ? Number(form.denda) : 0);
-      fd.append("total_pipa", form.total_pipa ? Number(form.total_pipa) : 0);
+      fd.append("pipa_dibawa", form.pipa_dibawa ? Number(form.pipa_dibawa) : 0);
+      fd.append("pipa_terpakai", form.pipa_terpakai ? Number(form.pipa_terpakai) : 0);
       fd.append("ducttape_terpakai", form.ducttape);
       fd.append("kabel_terpakai", form.kabel);
       fd.append("helper", form.helper);
-      fd.append("koordinat", form.koordinat);
+      fd.append("koordinat_sesuai", form.koordinat);
       fd.append("edukasi_customer", form.edukasi);
+      fotosList.forEach((f) => fd.append("fotos", f));
       fd.append("catatan", form.catatan);
       if (foto) fd.append("foto", foto);
       await api.post(`/tech/schedules/${id}/submit`, fd);
@@ -100,18 +103,42 @@ export default function TechTask() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div>
-                  <Label>Panjang Pipa Aktual (meter) *</Label>
-                  <Input type="number" min="0" step="0.5" data-testid="work-total-pipa" value={form.total_pipa} onChange={(e) => setForm({ ...form, total_pipa: e.target.value })} className="mt-1.5 h-12" placeholder="Contoh: 4" />
-                  <p className="text-xs text-slate-400 mt-1">Paket standar termasuk 3 m. Kelebihan dihitung Rp130.000/m otomatis ke invoice.</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label>Panjang Pipa Dibawa (m)</Label>
+                    <Input type="number" min="0" step="0.5" data-testid="work-pipa-dibawa" value={form.pipa_dibawa} onChange={(e) => setForm({ ...form, pipa_dibawa: e.target.value })} className="mt-1.5 h-12" placeholder="mis. 5" />
+                  </div>
+                  <div>
+                    <Label>Panjang Pipa Terpakai (m) *</Label>
+                    <Input type="number" min="0" step="0.5" data-testid="work-total-pipa" value={form.pipa_terpakai} onChange={(e) => setForm({ ...form, pipa_terpakai: e.target.value })} className="mt-1.5 h-12" placeholder="mis. 3" />
+                  </div>
                 </div>
+                <p className="text-xs text-slate-400">Extra pipa dihitung dari pipa <b>terpakai</b> (bukan yang dibawa). Paket standar termasuk 3 m; kelebihan Rp130.000/m otomatis masuk invoice. Contoh: bawa 4 m, terpakai 3 m → tanpa biaya extra.</p>
                 <div className="grid grid-cols-2 gap-3">
                   <div><Label>Ducttape Terpakai</Label><Input data-testid="work-ducttape" value={form.ducttape} onChange={(e) => setForm({ ...form, ducttape: e.target.value })} className="mt-1.5 h-12" placeholder="mis. 1 roll" /></div>
                   <div><Label>Kabel Terpakai</Label><Input data-testid="work-kabel" value={form.kabel} onChange={(e) => setForm({ ...form, kabel: e.target.value })} className="mt-1.5 h-12" placeholder="mis. 4 m" /></div>
-                  <div><Label>Helper</Label><Input data-testid="work-helper" value={form.helper} onChange={(e) => setForm({ ...form, helper: e.target.value })} className="mt-1.5 h-12" placeholder="Nama helper (bila ada)" /></div>
-                  <div><Label>Koordinat Lokasi</Label><Input data-testid="work-koordinat" value={form.koordinat} onChange={(e) => setForm({ ...form, koordinat: e.target.value })} className="mt-1.5 h-12" placeholder="-6.2, 106.8" /></div>
+                  <div className="col-span-2"><Label>Helper</Label><Input data-testid="work-helper" value={form.helper} onChange={(e) => setForm({ ...form, helper: e.target.value })} className="mt-1.5 h-12" placeholder="Nama helper (bila ada)" /></div>
                 </div>
-                <div><Label>Edukasi ke Customer</Label><Input data-testid="work-edukasi" value={form.edukasi} onChange={(e) => setForm({ ...form, edukasi: e.target.value })} className="mt-1.5 h-12" placeholder="mis. cara remote, jadwal cuci" /></div>
+                <div>
+                  <Label>Apakah lokasi titik koordinat konsumen sesuai dengan lokasi sebenarnya?</Label>
+                  <Select value={form.koordinat} onValueChange={(v) => setForm({ ...form, koordinat: v })}>
+                    <SelectTrigger data-testid="work-koordinat" className="mt-1.5 h-12"><SelectValue placeholder="Pilih jawaban" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="sesuai">Sesuai</SelectItem>
+                      <SelectItem value="tidak">Tidak Sesuai</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Mitra sudah melakukan edukasi penggunaan AC kepada konsumen?</Label>
+                  <Select value={form.edukasi} onValueChange={(v) => setForm({ ...form, edukasi: v })}>
+                    <SelectTrigger data-testid="work-edukasi" className="mt-1.5 h-12"><SelectValue placeholder="Pilih jawaban" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ya">Ya</SelectItem>
+                      <SelectItem value="tidak">Tidak</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </>
             )}
             {jenis === "maintenance" && (
@@ -138,12 +165,29 @@ export default function TechTask() {
             )}
             <div><Label>Catatan</Label><Textarea data-testid="work-catatan" value={form.catatan} onChange={(e) => setForm({ ...form, catatan: e.target.value })} rows={3} className="mt-1.5" /></div>
             <div>
-              <Label className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Foto Dokumentasi</Label>
+              <Label className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Foto Dokumentasi {jenis === "installation" ? "(bisa lebih dari 1, maks 2MB/foto)" : ""}</Label>
               <label data-testid="work-foto-area" className="mt-2 flex items-center justify-center gap-3 border-2 border-dashed border-slate-300 rounded-2xl p-6 cursor-pointer hover:border-[#0047AB] hover:bg-slate-50 transition-colors min-h-[48px]">
                 <UploadCloud className="w-6 h-6 text-slate-400" />
-                <span className="text-sm text-slate-600 font-medium">{foto ? foto.name : "Ambil / pilih foto"}</span>
-                <input data-testid="work-foto-input" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" className="hidden" onChange={(e) => setFoto(e.target.files[0] || null)} />
+                <span className="text-sm text-slate-600 font-medium">
+                  {jenis === "installation"
+                    ? (fotosList.length ? `${fotosList.length} foto dipilih` : "Pilih 1 atau lebih foto")
+                    : (foto ? foto.name : "Ambil / pilih foto")}
+                </span>
+                {jenis === "installation" ? (
+                  <input data-testid="work-foto-input" type="file" multiple accept="image/jpeg,image/png,image/webp" capture="environment" className="hidden"
+                    onChange={(e) => {
+                      const files = Array.from(e.target.files || []);
+                      const oversized = files.find((f) => f.size > 2 * 1024 * 1024);
+                      if (oversized) return toast.error(`Foto ${oversized.name} melebihi 2MB`);
+                      setFotosList(files);
+                    }} />
+                ) : (
+                  <input data-testid="work-foto-input" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" className="hidden" onChange={(e) => setFoto(e.target.files[0] || null)} />
+                )}
               </label>
+              {jenis === "installation" && fotosList.length > 0 && (
+                <p className="text-xs text-slate-400 mt-1">{fotosList.map((f) => f.name).join(", ")}</p>
+              )}
             </div>
             <Button data-testid="btn-submit-work" onClick={submit} disabled={busy} className="w-full h-12 rounded-full bg-[#0047AB] hover:bg-[#003a8c] font-semibold">
               {busy ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Send className="w-4 h-4 mr-2" />} Kirim Laporan

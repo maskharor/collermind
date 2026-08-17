@@ -4,6 +4,7 @@ import { Copy, MessageCircle } from "lucide-react";
 import { toast } from "sonner";
 import api, { fmtErr } from "@/lib/api";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { usePolling } from "@/lib/usePolling";
 
 function waLink(phone, message) {
   let p = (phone || "").replace(/\D/g, "");
@@ -15,11 +16,11 @@ export default function Notifications() {
   const [notifs, setNotifs] = useState([]);
   const [channel, setChannel] = useState("");
 
-  useEffect(() => {
-    api.get("/admin/notifications", { params: channel ? { channel } : {} })
+  const load = () => api.get("/admin/notifications", { params: channel ? { channel } : {} })
       .then((r) => setNotifs(r.data))
-      .catch((e) => toast.error(fmtErr(e)));
-  }, [channel]);
+      .catch(() => {});
+  useEffect(() => { load(); }, [channel]); // eslint-disable-line
+  usePolling(load, 15000);
 
   return (
     <div data-testid="admin-notifications">

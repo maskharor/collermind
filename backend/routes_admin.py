@@ -344,6 +344,14 @@ async def create_schedule(order_id: str, body: ScheduleBody, user=Admin):
     })
     if conflict:
         raise HTTPException(status_code=400, detail="Jadwal petugas bertabrakan pada tanggal & jam tersebut. Pilih jam lain atau hubungi CS untuk penjadwalan fleksibel.")
+
+    JENIS_LABEL = {"delivery": "Pengiriman", "inspection": "Inspeksi", "installation": "Instalasi", "maintenance": "Maintenance", "dismantling": "Pembongkaran", "return": "Pengembalian"}
+    if body.jenis_kegiatan in ("delivery", "installation", "dismantling", "return"):
+        done_exists = await db.schedules.find_one({
+            "rental_order_id": order_id, "jenis_kegiatan": body.jenis_kegiatan, "status": "done",
+        })
+        if done_exists:
+            raise HTTPException(status_code=400, detail=f"{JENIS_LABEL[body.jenis_kegiatan]} telah selesai dilakukan untuk order ini")
     doc = {
         "id": new_id(), "rental_order_id": order_id, "technician_id": body.technician_id,
         "assignee_role": required_role,

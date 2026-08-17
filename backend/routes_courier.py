@@ -49,7 +49,6 @@ async def submit_delivery(
     kondisi: str = Form(""),
     catatan: str = Form(""),
     foto_surat_jalan: UploadFile = File(...),
-    foto_ttd_penerima: UploadFile = File(...),
     foto_serah_terima: UploadFile = File(...),
     user=Courier,
 ):
@@ -65,14 +64,13 @@ async def submit_delivery(
         raise HTTPException(status_code=400, detail=f"Order berstatus {order['status']}, belum siap dikirim")
 
     p1 = await save_image(db, foto_surat_jalan, "delivery")
-    p2 = await save_image(db, foto_ttd_penerima, "delivery")
     p3 = await save_image(db, foto_serah_terima, "delivery")
 
     await db.deliveries.insert_one({
         "id": new_id(), "rental_order_id": order["id"], "technician_id": user["id"],
         "courier_id": user["id"], "tanggal": now_iso(), "status": "delivered",
         "kondisi_unit": kondisi, "catatan": catatan,
-        "foto": p3, "foto_surat_jalan": p1, "foto_ttd_penerima": p2, "foto_serah_terima": p3,
+        "foto": p3, "foto_surat_jalan": p1, "foto_serah_terima": p3,
         "created_at": now_iso(),
     })
     await db.schedules.update_one({"id": sid}, {"$set": {"status": "done"}})

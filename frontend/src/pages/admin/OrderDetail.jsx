@@ -6,6 +6,7 @@ import { ArrowLeft, CheckCircle2, XCircle, CalendarPlus, FlagTriangleRight, File
 import { toast } from "sonner";
 import api, { fmtErr, rupiah, fileUrl } from "@/lib/api";
 import { StatusBadge, JENIS_KEGIATAN, INVOICE_STATUS, PAYMENT_STATUS } from "@/components/StatusBadge";
+import { usePolling } from "@/lib/usePolling";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -32,6 +33,7 @@ export default function OrderDetail() {
     api.get("/admin/couriers").then((r) => setCouriers(r.data)).catch(() => {});
   };
   useEffect(load, [id]);
+  usePolling(load, 15000);
 
   const allocValid = useMemo(() => {
     if (!data) return false;
@@ -145,14 +147,29 @@ export default function OrderDetail() {
           {order.lokasi_detail && (
             <section className="bg-white border border-slate-200 rounded-xl p-6" data-testid="lokasi-detail-admin">
               <h2 className="font-heading font-bold text-slate-800 mb-3">Detail Lokasi (dari Customer)</h2>
-              <div className="grid sm:grid-cols-2 gap-x-8 gap-y-2 text-sm">
-                <p><span className="text-slate-400 block text-xs">Lantai</span>{order.lokasi_detail.lantai}</p>
-                <p><span className="text-slate-400 block text-xs">Akses Lokasi</span>{order.lokasi_detail.akses_lokasi}</p>
-                <p><span className="text-slate-400 block text-xs">Titik Indoor</span>{order.lokasi_detail.titik_indoor}</p>
-                <p><span className="text-slate-400 block text-xs">Titik Outdoor</span>{order.lokasi_detail.titik_outdoor}</p>
-                <p><span className="text-slate-400 block text-xs">Sumber Listrik</span>{order.lokasi_detail.sumber_listrik}</p>
-                {order.lokasi_detail.catatan_lokasi && <p><span className="text-slate-400 block text-xs">Catatan</span>{order.lokasi_detail.catatan_lokasi}</p>}
-              </div>
+              {order.lokasi_detail.foto_indoor_path ? (
+                <div className="grid sm:grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <p className="text-slate-400 text-xs mb-1">Foto Rencana Indoor + Sumber Listrik</p>
+                    <img src={fileUrl(order.lokasi_detail.foto_indoor_path)} alt="indoor" data-testid="lokasi-foto-indoor" className="max-h-40 rounded-lg border border-slate-200" />
+                    <p className="text-xs mt-1">{order.lokasi_detail.ket_indoor}</p>
+                  </div>
+                  <div>
+                    <p className="text-slate-400 text-xs mb-1">Foto Rencana Outdoor</p>
+                    <img src={fileUrl(order.lokasi_detail.foto_outdoor_path)} alt="outdoor" data-testid="lokasi-foto-outdoor" className="max-h-40 rounded-lg border border-slate-200" />
+                    <p className="text-xs mt-1">{order.lokasi_detail.ket_outdoor}</p>
+                  </div>
+                  {order.lokasi_detail.perkiraan_pipa_meter > 0 && <p className="sm:col-span-2 text-xs text-slate-500">Perkiraan pipa dari customer: {order.lokasi_detail.perkiraan_pipa_meter} m</p>}
+                </div>
+              ) : (
+                <div className="grid sm:grid-cols-2 gap-x-8 gap-y-2 text-sm">
+                  {order.lokasi_detail.lantai && <p><span className="text-slate-400 block text-xs">Lantai</span>{order.lokasi_detail.lantai}</p>}
+                  {order.lokasi_detail.akses_lokasi && <p><span className="text-slate-400 block text-xs">Akses Lokasi</span>{order.lokasi_detail.akses_lokasi}</p>}
+                  {order.lokasi_detail.titik_indoor && <p><span className="text-slate-400 block text-xs">Titik Indoor</span>{order.lokasi_detail.titik_indoor}</p>}
+                  {order.lokasi_detail.titik_outdoor && <p><span className="text-slate-400 block text-xs">Titik Outdoor</span>{order.lokasi_detail.titik_outdoor}</p>}
+                  {order.lokasi_detail.sumber_listrik && <p><span className="text-slate-400 block text-xs">Sumber Listrik</span>{order.lokasi_detail.sumber_listrik}</p>}
+                </div>
+              )}
             </section>
           )}
 
@@ -337,6 +354,7 @@ export default function OrderDetail() {
               <h2 className="font-heading font-bold text-slate-800 mb-3 flex items-center gap-2"><FileText className="w-5 h-5 text-[#0047AB]" /> Kontrak {contract.content?.nomor}</h2>
               <p className="text-xs text-slate-500">Status: <b>{contractSigned ? "Ditandatangani" : "Menunggu TTD customer"}</b></p>
               {contractSigned && <p className="text-xs text-slate-500 mt-1">Oleh <b>{contract.signer_name}</b> pada {fmtD(contract.signed_at)}</p>}
+              {contract.pdf_path && <a href={fileUrl(contract.pdf_path)} target="_blank" rel="noreferrer" data-testid="contract-pdf-link" className="mt-2 inline-block text-xs font-semibold text-[#0047AB] hover:underline">Lihat Kontrak PDF Bertanda Tangan</a>}
               <ul className="list-disc ml-5 mt-3 text-xs text-slate-600 space-y-1">{(contract.content?.items || []).map((it, i) => <li key={i}>{it}</li>)}</ul>
             </section>
           )}
@@ -389,7 +407,12 @@ export default function OrderDetail() {
                       {(w.kondisi_unit || w.kondisi_instalasi) && <p className="text-slate-500 mt-1">Kondisi: {w.kondisi_unit || w.kondisi_instalasi}</p>}
                       {w.hasil && <p className="text-slate-500">Hasil: {w.hasil}</p>}
                       {w.jenis_maintenance && <p className="text-slate-500">Jenis: {w.jenis_maintenance}</p>}
-                      {w.total_pipa_meter > 0 && <p className="text-slate-500">Pipa: {w.total_pipa_meter} m{w.extra_pipa_meter > 0 ? ` (extra ${w.extra_pipa_meter} m = ${rupiah(w.biaya_extra_pipa)})` : " (dalam paket)"}</p>}
+                      {w.total_pipa_meter > 0 && <p className="text-slate-500">Pipa: dibawa {w.pipa_dibawa_meter || "-"} m · terpakai {w.pipa_terpakai_meter || w.total_pipa_meter} m{w.extra_pipa_meter > 0 ? ` (extra ${w.extra_pipa_meter} m = ${rupiah(w.biaya_extra_pipa)})` : " (dalam paket)"}</p>}
+                      {(w.ducttape_terpakai || w.kabel_terpakai) && <p className="text-slate-500">Ducttape: {w.ducttape_terpakai || "-"} · Kabel: {w.kabel_terpakai || "-"}</p>}
+                      {w.helper && <p className="text-slate-500">Helper: {w.helper}</p>}
+                      {w.koordinat_sesuai && <p className="text-slate-500">Titik koordinat konsumen: {w.koordinat_sesuai === "sesuai" ? "Sesuai" : "Tidak sesuai"}</p>}
+                      {w.edukasi_customer && <p className="text-slate-500">Edukasi penggunaan AC: {w.edukasi_customer === "ya" ? "Ya" : "Tidak"}</p>}
+                      {w.fotos?.length > 0 && <p className="mt-1 flex gap-2 flex-wrap">{w.fotos.map((fp, fi) => <a key={fi} href={fileUrl(fp)} target="_blank" rel="noreferrer" data-testid={`work-fotos-${w.id}-${fi}`} className="text-[#0047AB] font-semibold hover:underline">Foto {fi + 1}</a>)}</p>}
                       {w.denda > 0 && <p className="text-red-600 font-semibold">Denda: {rupiah(w.denda)}</p>}
                       {w.catatan && <p className="text-slate-500 italic mt-1">"{w.catatan}"</p>}
                       {w.foto && <a href={fileUrl(w.foto)} target="_blank" rel="noreferrer" data-testid={`work-foto-${w.id}`} className="text-[#0047AB] font-semibold hover:underline inline-block mt-1">Lihat Foto</a>}

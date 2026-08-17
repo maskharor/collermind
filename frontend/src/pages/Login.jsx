@@ -35,9 +35,8 @@ export default function Login() {
     <div className="min-h-screen grid grid-cols-1 lg:grid-cols-2" data-testid="login-page">
       <div className="flex items-center justify-center px-6 py-12">
         <div className="w-full max-w-md">
-          <Link to="/" data-testid="login-logo" className="flex items-center gap-2 font-heading font-extrabold text-xl text-slate-900">
-            <span className="w-10 h-10 rounded-xl bg-[#0047AB] text-white flex items-center justify-center"><Snowflake className="w-5 h-5" /></span>
-            Coller<span className="text-cyan-500">Mind</span>
+          <Link to="/" data-testid="login-logo" className="flex items-center">
+            <img src="/assets/logo.jpeg" alt="CollerMind" className="h-11 w-auto object-contain rounded-lg" />
           </Link>
           <h1 className="font-heading text-3xl font-black tracking-tight text-slate-900 mt-10">Masuk Portal</h1>
           <p className="text-slate-500 text-sm mt-2">Khusus Admin, Teknisi & Kurir. Customer tidak memerlukan akun.</p>

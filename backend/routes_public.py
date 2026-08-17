@@ -2,7 +2,8 @@ import json
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
+import httpx
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form, Response
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from core import (
@@ -10,8 +11,9 @@ from core import (
     DURASI_OPTIONS, STATUS_HUNIAN_OPTIONS, SLOT_TIMES,
     verify_public_access,
 )
-from storage import save_image
+from storage import save_image, save_pdf
 from notify import notify_event
+from contract_service import generate_contract_docx
 
 router = APIRouter(tags=["public"])
 
@@ -19,6 +21,48 @@ router = APIRouter(tags=["public"])
 @router.get("/api/public/tariffs")
 async def list_tariffs():
     return await db.tariffs.find({"aktif": True}, {"_id": 0}).to_list(100)
+
+
+# ---------- Wilayah Indonesia (proxy + cache) ----------
+
+EMSIFA = "https://www.emsifa.com/api-wilayah-indonesia/api"
+
+
+async def _wilayah(path: str):
+    cache = await db.wilayah_cache.find_one({"key": path}, {"_id": 0})
+    if cache:
+        return cache["data"]
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(f"{EMSIFA}/{path}")
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        if cache:
+            return cache["data"]
+        raise HTTPException(status_code=503, detail="Data wilayah tidak dapat dimuat, coba lagi")
+    await db.wilayah_cache.update_one({"key": path}, {"$set": {"key": path, "data": data}}, upsert=True)
+    return data
+
+
+@router.get("/api/public/wilayah/provinsi")
+async def wilayah_provinsi():
+    return await _wilayah("provinces.json")
+
+
+@router.get("/api/public/wilayah/kota/{prov_id}")
+async def wilayah_kota(prov_id: str):
+    return await _wilayah(f"regencies/{prov_id}.json")
+
+
+@router.get("/api/public/wilayah/kecamatan/{kota_id}")
+async def wilayah_kecamatan(kota_id: str):
+    return await _wilayah(f"districts/{kota_id}.json")
+
+
+@router.get("/api/public/wilayah/kelurahan/{kec_id}")
+async def wilayah_kelurahan(kec_id: str):
+    return await _wilayah(f"villages/{kec_id}.json")
 
 
 # ---------- Rental submission ----------
@@ -33,7 +77,11 @@ class RentalPayload(BaseModel):
     email: EmailStr
     no_hp: str = Field(min_length=9, max_length=20)
     alamat_ktp: str = Field(min_length=10)
-    alamat_pemasangan: str = Field(min_length=10)
+    provinsi: str = Field(min_length=3)
+    kota_kab: str = Field(min_length=3)
+    kecamatan: str = Field(min_length=3)
+    kelurahan: str = Field(min_length=3)
+    detail_alamat: str = Field(min_length=5)
     status_hunian: str
     jenis_ruangan: str
     tanggal_mulai: str
@@ -114,6 +162,8 @@ async def submit_rental(request: Request, payload: str = Form(...), ktp: UploadF
             "unit_ids": [],
         })
 
+    alamat_pemasangan = f"{data.detail_alamat}, Kel. {data.kelurahan}, Kec. {data.kecamatan}, {data.kota_kab}, {data.provinsi}"
+
     sewa = sum(d["subtotal"] for d in details)
     estimasi = {
         "sewa_bulanan": sewa,
@@ -130,7 +180,9 @@ async def submit_rental(request: Request, payload: str = Form(...), ktp: UploadF
     customer = await db.customers.find_one({"$or": [{"email": email}, {"no_hp": data.no_hp}], "deleted_at": None})
     cust_fields = {
         "nama": data.nama, "email": email, "no_hp": data.no_hp,
-        "alamat_ktp": data.alamat_ktp, "alamat_pemasangan": data.alamat_pemasangan,
+        "alamat_ktp": data.alamat_ktp, "alamat_pemasangan": alamat_pemasangan,
+        "provinsi": data.provinsi, "kota_kab": data.kota_kab,
+        "kecamatan": data.kecamatan, "kelurahan": data.kelurahan,
         "status_hunian": data.status_hunian,
         "nama_pj_lokasi": data.nama_pj_lokasi, "no_hp_pj_lokasi": data.no_hp_pj_lokasi,
         "data_consent": True, "data_consent_at": now_iso(),
@@ -165,6 +217,7 @@ async def submit_rental(request: Request, payload: str = Form(...), ktp: UploadF
         "ktp_path": ktp_path,
         "contract_status": "none",
         "lokasi_detail": None,
+        "perpanjangan": None,
         "payment_status": "unpaid",
         "payment_method": None,
         "paid_at": None,
@@ -210,6 +263,7 @@ async def track_order(kode: str):
         "has_invoice": bool(invoice),
         "invoice_status": invoice["status"] if invoice else None,
         "payment_status": order.get("payment_status", "unpaid"),
+        "perpanjangan": order.get("perpanjangan"),
     }
 
 
@@ -240,6 +294,7 @@ async def full_access_payload(order, customer):
         "estimasi": order.get("estimasi"),
         "denda": order.get("denda", 0),
         "payment_status": order.get("payment_status", "unpaid"),
+        "perpanjangan": order.get("perpanjangan"),
         "contract_status": order.get("contract_status", "none"),
         "lokasi_detail": order.get("lokasi_detail"),
         "contract": contract,
@@ -257,6 +312,43 @@ async def access_detail(body: AccessBody):
     return await full_access_payload(order, customer)
 
 
+# ---------- Kontrak digital: unduh template terisi + upload PDF bertanda tangan ----------
+
+@router.get("/api/public/contract/download")
+async def download_contract(kode: str, kontak: str):
+    order, customer = await verify_public_access(kode, kontak)
+    contract = await db.contracts.find_one({"order_id": order["id"]})
+    if not contract:
+        raise HTTPException(status_code=400, detail="Kontrak belum diterbitkan (menunggu verifikasi admin)")
+    data = generate_contract_docx(order, customer, contract)
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="Kontrak-{order["kode"]}.docx"'},
+    )
+
+
+@router.post("/api/public/contract/upload")
+async def upload_signed_contract(kode: str = Form(...), kontak: str = Form(...), dokumen: UploadFile = File(...)):
+    order, customer = await verify_public_access(kode, kontak)
+    contract = await db.contracts.find_one({"order_id": order["id"]})
+    if not contract:
+        raise HTTPException(status_code=400, detail="Kontrak belum diterbitkan (menunggu verifikasi admin)")
+    if contract["status"] == "signed":
+        raise HTTPException(status_code=400, detail="Kontrak sudah ditandatangani")
+    pdf_path = await save_pdf(db, dokumen, "kontrak")
+    await db.contracts.update_one(
+        {"id": contract["id"]},
+        {"$set": {"status": "signed", "signer_name": customer.get("nama"), "signed_at": now_iso(), "pdf_path": pdf_path}},
+    )
+    await db.rental_orders.update_one({"id": order["id"]}, {"$set": {"contract_status": "signed", "updated_at": now_iso()}})
+    await db.rental_orders.update_one(
+        {"id": order["id"]},
+        {"$push": {"status_history": {"status": order["status"], "at": now_iso(), "by": customer.get("nama", "customer"), "catatan": "Kontrak bertanda tangan diunggah (PDF)"}}},
+    )
+    return {"ok": True}
+
+
 class SignBody(BaseModel):
     kode: str
     kontak: str
@@ -265,6 +357,7 @@ class SignBody(BaseModel):
 
 @router.post("/api/public/contract/sign")
 async def sign_contract(body: SignBody, request: Request):
+    # Legacy: tetap didukung untuk order lama; flow baru menggunakan download + upload PDF
     order, customer = await verify_public_access(body.kode, body.kontak)
     contract = await db.contracts.find_one({"order_id": order["id"]})
     if not contract:
@@ -277,35 +370,34 @@ async def sign_contract(body: SignBody, request: Request):
         {"$set": {"status": "signed", "signer_name": body.signer_name, "signed_at": now_iso(), "signer_ip": ip}},
     )
     await db.rental_orders.update_one({"id": order["id"]}, {"$set": {"contract_status": "signed", "updated_at": now_iso()}})
-    await db.rental_orders.update_one(
-        {"id": order["id"]},
-        {"$push": {"status_history": {"status": order["status"], "at": now_iso(), "by": body.signer_name, "catatan": "Kontrak digital ditandatangani"}}},
-    )
     return {"ok": True}
 
 
-# ---------- Form lanjutan: detail lokasi ----------
-
-class LocationDetailBody(BaseModel):
-    kode: str
-    kontak: str
-    lantai: str = Field(min_length=1, max_length=20)
-    akses_lokasi: str = Field(min_length=2, max_length=100)
-    titik_indoor: str = Field(min_length=3, max_length=200)
-    titik_outdoor: str = Field(min_length=3, max_length=200)
-    sumber_listrik: str = Field(min_length=3, max_length=100)
-    catatan_lokasi: Optional[str] = ""
-
+# ---------- Form lanjutan: detail lokasi (foto indoor + outdoor + perkiraan pipa) ----------
 
 @router.post("/api/public/location-detail")
-async def location_detail(body: LocationDetailBody):
-    order, customer = await verify_public_access(body.kode, body.kontak)
+async def location_detail(
+    kode: str = Form(...),
+    kontak: str = Form(...),
+    ket_indoor: str = Form(...),
+    ket_outdoor: str = Form(...),
+    perkiraan_pipa: float = Form(0),
+    foto_indoor: UploadFile = File(...),
+    foto_outdoor: UploadFile = File(...),
+):
+    order, customer = await verify_public_access(kode, kontak)
     if order.get("contract_status") != "signed":
         raise HTTPException(status_code=400, detail="Tandatangani kontrak terlebih dahulu")
+    if len(ket_indoor.strip()) < 3 or len(ket_outdoor.strip()) < 3:
+        raise HTTPException(status_code=400, detail="Keterangan foto indoor dan outdoor wajib diisi")
+    p1 = await save_image(db, foto_indoor, "lokasi")
+    p2 = await save_image(db, foto_outdoor, "lokasi")
     detail = {
-        "lantai": body.lantai, "akses_lokasi": body.akses_lokasi,
-        "titik_indoor": body.titik_indoor, "titik_outdoor": body.titik_outdoor,
-        "sumber_listrik": body.sumber_listrik, "catatan_lokasi": body.catatan_lokasi or "",
+        "foto_indoor_path": p1,
+        "ket_indoor": ket_indoor.strip(),
+        "foto_outdoor_path": p2,
+        "ket_outdoor": ket_outdoor.strip(),
+        "perkiraan_pipa_meter": perkiraan_pipa,
         "updated_at": now_iso(),
     }
     await db.rental_orders.update_one({"id": order["id"]}, {"$set": {"lokasi_detail": detail, "updated_at": now_iso()}})
@@ -322,28 +414,26 @@ async def available_slots(tanggal: str):
         raise HTTPException(status_code=400, detail="Format tanggal tidak valid")
     if d < datetime.now(timezone.utc).date():
         raise HTTPException(status_code=400, detail="Tanggal tidak boleh di masa lalu")
-    tech_count = await db.users.count_documents({"role": "technician"})
-    if tech_count == 0:
-        return {"tanggal": tanggal, "slots": []}
-    taken = await db.schedules.find({"tanggal": tanggal, "status": "planned"}, {"_id": 0, "jam": 1, "technician_id": 1}).to_list(500)
     tech_ids = {u["id"] for u in await db.users.find({"role": "technician"}, {"_id": 0, "id": 1}).to_list(100)}
+    if not tech_ids:
+        return {"tanggal": tanggal, "slots": []}
+    taken = await db.schedules.find({"tanggal": tanggal, "status": "planned", "technician_id": {"$in": list(tech_ids)}}, {"_id": 0, "jam": 1}).to_list(500)
     per_jam = {}
     for t in taken:
-        if t["technician_id"] in tech_ids:
-            per_jam[t["jam"]] = per_jam.get(t["jam"], 0) + 1
+        per_jam[t["jam"]] = per_jam.get(t["jam"], 0) + 1
     return {
         "tanggal": tanggal,
-        "slots": [{"jam": j, "tersedia": per_jam.get(j, 0) < tech_count} for j in SLOT_TIMES],
+        "slots": [{"jam": j, "tersedia": per_jam.get(j, 0) < len(tech_ids)} for j in SLOT_TIMES],
     }
 
 
-# ---------- Usulan jadwal (delivery / installation) ----------
+# ---------- Usulan jadwal (delivery: tanggal saja / installation: pilih slot) ----------
 
 class ScheduleRequestBody(BaseModel):
     kode: str
     kontak: str
     tanggal: str
-    jam: str
+    jam: Optional[str] = ""
     jenis: str = "delivery"
     catatan: Optional[str] = ""
 
@@ -387,12 +477,38 @@ async def schedule_request(body: ScheduleRequestBody):
     )
     doc = {
         "id": new_id(), "order_id": order["id"], "kode": order["kode"],
-        "tanggal": body.tanggal, "jam": body.jam, "jenis": body.jenis,
+        "tanggal": body.tanggal, "jam": body.jam or "", "jenis": body.jenis,
         "catatan": body.catatan or "", "status": "pending", "created_at": now_iso(),
     }
     await db.schedule_requests.insert_one(doc)
     doc.pop("_id", None)
     return doc
+
+
+# ---------- Perpanjangan sewa (open-ended) ----------
+
+class ExtendBody(BaseModel):
+    kode: str
+    kontak: str
+    lanjut: bool
+
+
+@router.post("/api/public/extend")
+async def extend_rental(body: ExtendBody):
+    order, customer = await verify_public_access(body.kode, body.kontak)
+    if order["status"] not in ("active", "maintenance"):
+        raise HTTPException(status_code=400, detail="Perpanjangan hanya tersedia saat masa sewa aktif")
+    if order.get("perpanjangan") == "open_ended":
+        raise HTTPException(status_code=400, detail="Perpanjangan sudah dikonfirmasi sebelumnya")
+    value = "open_ended" if body.lanjut else "berakhir_sesuai_jadwal"
+    note = "Customer mengonfirmasi LANJUT menyewa (tagihan bulanan berlanjut otomatis tanpa batas durasi)" if body.lanjut else "Customer memilih sewa berakhir sesuai jadwal"
+    await db.rental_orders.update_one({"id": order["id"]}, {"$set": {"perpanjangan": value, "updated_at": now_iso()}})
+    await db.rental_orders.update_one(
+        {"id": order["id"]},
+        {"$push": {"status_history": {"status": order["status"], "at": now_iso(), "by": customer.get("nama", "customer"), "catatan": note}}},
+    )
+    await notify_event(order["id"], "extension_confirmed", {"lanjut": body.lanjut})
+    return {"ok": True, "perpanjangan": value}
 
 
 # ---------- Upload bukti pembayaran ----------

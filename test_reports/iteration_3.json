@@ -1,0 +1,27 @@
+{
+  "summary": "v4 regression + feature testing on CollerMind. Backend pytest 62/62 pass (added 10 new v4 tests): wilayah cascading proxy (provinsi 34 items, kota by 32, kecamatan by 3271), contract DOCX download 200 with correct MIME + Content-Disposition + 201KB payload (403 for wrong kontak), extension already open_ended (8U8U) → 400 'sudah dikonfirmasi', extension wrong contact → 403, public schedule-request delivery on active order (AIQX) rejected 400, admin re-schedule delivery after delivery done (AIQX active) → 400 'Pengiriman telah selesai dilakukan', rental payload v4 missing provinsi → 422. Legacy suite still passes: 3-role auth, tracking, admin CRUD/billings/notifications, cron auth+idempotent, courier RBAC, schedule role guard. Frontend: /tracking route (NOT /lacak) verified end-to-end for E2E order CLM-20260817-8U8U — timeline shows all v4 statuses, kontrak-signed badge + PDF note visible, WA admin buttons resolve to https://wa.me/6285695965790 and https://wa.me/6281232576420 exactly as specified, extension-active badge shown (order is open_ended). Frontend /sewa wilayah cascading verified in UI: DKI Jakarta → 6 kota → 2 kecamatan → 3 kelurahan populated correctly, downstream selects enable only after parent picked. Logo CollerMind renders in header + footer.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "routes_public.py `_wilayah` catches ALL upstream errors then falls back to cache only if cache exists; if cache miss + emsifa hiccup during first use, user sees 503 with no retry. Consider serving stale-on-error via a longer TTL and background refresh.",
+    "routes_cron.py `run_billing_cycle` open-ended block inserts a new invoice inside a broad try/except but does not push a status_history entry or notify_event when the new invoice is created, so customers won't get notified about the upcoming perpanjangan invoice until it transitions to 'issued' on the next bill_date. Confirm this is desired.",
+    "routes_tech.py `submit_work` reads `request.form()` inside the `installation` branch AFTER FastAPI already parsed Form(...) params; on some ASGI servers this can raise 'Stream consumed'. Consider passing multi-file uploads via a `List[UploadFile] = File([])` param instead of manual form parsing for reliability."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (62/62)", "frontend": "100% (tracking + wilayah cascading verified)"},
+  "seed_data_creation": "None. Cron dedupe test reuses run_id 'TEST_cron_regression_2026'. Extension test on AIQX order was executed via curl (side effect: perpanjangan=berakhir_sesuai_jadwal on CLM-20260817-AIQX). Automated tests only exercise the already-open_ended state on CLM-20260817-8U8U so this side effect on AIQX is a one-time manual verification.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "Admin maskharor.prakerin@gmail.com/admin123, Teknisi teknisi@sewaac.id/teknisi123, Kurir kurir@sewaac.id/kurir123. E2E orders CLM-20260817-8U8U (082112223333, open_ended) and CLM-20260817-AIQX (083122334455, active).",
+  "context_for_next_testing_agent": "Frontend tracking route is /tracking (NOT /lacak — /lacak returns 404-ish blank page from router). backend_test.py now 62 cases including v4 (wilayah cascading, contract download, extension guards, public schedule-request active-order guard, admin re-schedule delivery-done guard, rental v4 payload validation). Public /api/public/rentals still rate-limited 5/hr per IP → success submit intentionally NOT in regression. AIQX order was updated to perpanjangan='berakhir_sesuai_jadwal' during manual curl verification; if a full extension flow test is needed, use a fresh order. Frontend /sewa wilayah cascading works with shadcn Select component correctly.",
+  "rca_of_the_issue": "No issues found. All v4 features (wilayah cascading proxy, contract DOCX download, kontrak signed PDF badge, extension open_ended state, WA admin 1&2 buttons with correct numbers 085695965790/081232576420, admin delivery-done guard, public schedule-request status guards, rental v4 alamat fields) behave per spec."
+}

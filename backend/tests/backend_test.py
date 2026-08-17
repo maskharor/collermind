@@ -438,6 +438,149 @@ class TestCronBilling:
 
 # ---------------- Settings persistence ----------------
 
+# ---------------- v4: Wilayah cascading proxy ----------------
+
+class TestWilayahCascading:
+    def test_provinsi_list(self):
+        r = requests.get(f"{API}/public/wilayah/provinsi")
+        assert r.status_code == 200
+        provs = r.json()
+        assert isinstance(provs, list) and len(provs) >= 30
+        assert all("id" in p and "name" in p for p in provs[:5])
+
+    def test_kota_by_provinsi(self):
+        # 32 = Jawa Barat
+        r = requests.get(f"{API}/public/wilayah/kota/32")
+        assert r.status_code == 200
+        kota = r.json()
+        assert isinstance(kota, list) and len(kota) >= 10
+        # Kota list must contain valid entries (name may vary format)
+        assert all("name" in k and "id" in k for k in kota[:5])
+
+    def test_kecamatan_by_kota(self):
+        r = requests.get(f"{API}/public/wilayah/kecamatan/3271")
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
+
+
+# ---------------- v4: Contract download DOCX + access guard ----------------
+
+class TestContractDownload:
+    def test_contract_download_ok(self):
+        r = requests.get(
+            f"{API}/public/contract/download",
+            params={"kode": E2E_KODE, "kontak": E2E_KONTAK},
+        )
+        assert r.status_code == 200
+        assert "officedocument.wordprocessingml.document" in r.headers.get("content-type", "")
+        assert len(r.content) > 5000  # DOCX file has meaningful size
+        assert r.headers.get("content-disposition", "").endswith(f'"Kontrak-{E2E_KODE}.docx"')
+
+    def test_contract_download_wrong_kontak_403(self):
+        r = requests.get(
+            f"{API}/public/contract/download",
+            params={"kode": E2E_KODE, "kontak": "0000000"},
+        )
+        assert r.status_code == 403
+
+
+# ---------------- v4: Extension (open-ended) ----------------
+
+class TestExtension:
+    def test_extend_already_open_ended_rejected(self):
+        # 8U8U is already open_ended → should 400
+        r = requests.post(
+            f"{API}/public/extend",
+            json={"kode": E2E_KODE, "kontak": E2E_KONTAK, "lanjut": True},
+        )
+        assert r.status_code == 400
+        assert "sudah dikonfirmasi" in r.json().get("detail", "").lower()
+
+    def test_extend_wrong_contact_forbidden(self):
+        r = requests.post(
+            f"{API}/public/extend",
+            json={"kode": E2E_KODE, "kontak": "0000000", "lanjut": True},
+        )
+        assert r.status_code == 403
+
+
+# ---------------- v4: Public schedule-request guards ----------------
+
+class TestScheduleRequestGuards:
+    def test_delivery_on_active_order_rejected(self):
+        # AIQX is 'active' — should not allow new delivery request via public flow
+        r = requests.post(
+            f"{API}/public/schedule-request",
+            json={
+                "kode": "CLM-20260817-AIQX",
+                "kontak": "083122334455",
+                "tanggal": "2027-05-01",
+                "jenis": "delivery",
+            },
+        )
+        assert r.status_code == 400
+        assert "active" in r.json().get("detail", "").lower() or "pengajuan" in r.json().get("detail", "").lower()
+
+
+# ---------------- v4: Admin cannot re-schedule delivery when delivery already done ----------------
+
+class TestScheduleDeliveryDoneGuard:
+    def test_re_schedule_delivery_after_done_rejected(self, admin_session):
+        orders = admin_session.get(f"{API}/admin/orders").json()
+        aiqx = next((o for o in orders if o["kode"] == "CLM-20260817-AIQX"), None)
+        assert aiqx is not None, "Order AIQX not found"
+        couriers = admin_session.get(f"{API}/admin/couriers").json()
+        assert couriers, "No courier seeded"
+        cid = couriers[0]["id"]
+        body = {
+            "technician_id": cid,
+            "tanggal": "2027-06-01",
+            "jam": "10:00",
+            "jenis_kegiatan": "delivery",
+            "catatan": "TEST re-schedule after done",
+        }
+        r = admin_session.post(f"{API}/admin/orders/{aiqx['id']}/schedules", json=body)
+        assert r.status_code == 400
+        detail = r.json().get("detail", "").lower()
+        assert "telah selesai" in detail or "selesai dilakukan" in detail, detail
+
+
+# ---------------- v4: Rental payload requires new alamat fields ----------------
+
+class TestRentalV4Payload:
+    @pytest.fixture(scope="class")
+    def tariff_id(self):
+        return requests.get(f"{API}/public/tariffs").json()[0]["id"]
+
+    def test_reject_missing_provinsi(self, tariff_id):
+        payload = {
+            "nama": "Test V4",
+            "email": "TEST_v4@example.com",
+            "no_hp": "081200011122",
+            "alamat_ktp": "Jl. KTP No. 1, Jakarta",
+            # provinsi missing
+            "kota_kab": "Kota Bogor",
+            "kecamatan": "Bogor Tengah",
+            "kelurahan": "Paledang",
+            "detail_alamat": "RT 01 RW 02 No. 5",
+            "status_hunian": "Rumah",
+            "jenis_ruangan": "Kamar",
+            "tanggal_mulai": "2026-12-01",
+            "durasi_sewa": 3,
+            "nama_pj_lokasi": "Pak RT",
+            "no_hp_pj_lokasi": "081222233344",
+            "data_consent": True,
+            "items": [{"tariff_id": tariff_id, "quantity": 1}],
+        }
+        with open(KTP_IMAGE, "rb") as f:
+            r = requests.post(
+                f"{API}/public/rentals",
+                data={"payload": json.dumps(payload)},
+                files={"ktp": ("ktp.png", f.read(), "image/png")},
+            )
+        assert r.status_code == 422
+
+
 class TestSettings:
     def test_get_accounts(self, admin_session):
         r = admin_session.get(f"{API}/admin/settings/bank-accounts")

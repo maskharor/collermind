@@ -5,15 +5,18 @@ import { MapPin, Clock, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import api, { fmtErr } from "@/lib/api";
 import { StatusBadge } from "@/components/StatusBadge";
+import { usePolling } from "@/lib/usePolling";
 
 export default function CourierDashboard() {
   const [today, setToday] = useState([]);
   const [all, setAll] = useState([]);
 
-  useEffect(() => {
-    api.get("/courier/schedules", { params: { scope: "today" } }).then((r) => setToday(r.data)).catch((e) => toast.error(fmtErr(e)));
+  const load = () => {
+    api.get("/courier/schedules", { params: { scope: "today" } }).then((r) => setToday(r.data)).catch(() => {});
     api.get("/courier/schedules").then((r) => setAll(r.data)).catch(() => {});
-  }, []);
+  };
+  useEffect(() => { load(); }, []); // eslint-disable-line
+  usePolling(load, 15000);
 
   const upcoming = all.filter((s) => !today.some((t) => t.id === s.id) && s.status === "planned");
   const done = all.filter((s) => s.status === "done");

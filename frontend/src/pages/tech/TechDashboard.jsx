@@ -5,6 +5,7 @@ import { MapPin, Clock, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import api, { fmtErr } from "@/lib/api";
 import { JENIS_KEGIATAN, StatusBadge } from "@/components/StatusBadge";
+import { usePolling } from "@/lib/usePolling";
 
 function TaskCard({ s, i }) {
   return (
@@ -33,10 +34,12 @@ export default function TechDashboard() {
   const [today, setToday] = useState([]);
   const [all, setAll] = useState([]);
 
-  useEffect(() => {
-    api.get("/tech/schedules", { params: { scope: "today" } }).then((r) => setToday(r.data)).catch((e) => toast.error(fmtErr(e)));
+  const load = () => {
+    api.get("/tech/schedules", { params: { scope: "today" } }).then((r) => setToday(r.data)).catch(() => {});
     api.get("/tech/schedules").then((r) => setAll(r.data)).catch(() => {});
-  }, []);
+  };
+  useEffect(() => { load(); }, []); // eslint-disable-line
+  usePolling(load, 15000);
 
   const upcoming = all.filter((s) => !today.some((t) => t.id === s.id) && s.status === "planned");
   const done = all.filter((s) => s.status === "done");
