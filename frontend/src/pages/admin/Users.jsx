@@ -55,6 +55,7 @@ export default function Users() {
                   <SelectContent>
                     <SelectItem value="admin">Admin</SelectItem>
                     <SelectItem value="technician">Teknisi</SelectItem>
+                    <SelectItem value="courier">Kurir</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -73,7 +74,7 @@ export default function Users() {
               <TableRow key={u.id} data-testid={`user-row-${u.id}`} className="hover:bg-slate-50">
                 <TableCell className="font-semibold">{u.name}{u.id === me?.id && <span className="text-xs text-slate-400 ml-2">(Anda)</span>}</TableCell>
                 <TableCell>{u.email}</TableCell>
-                <TableCell><span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${u.role === "admin" ? "bg-[#0047AB]/10 text-[#0047AB]" : "bg-cyan-100 text-cyan-700"}`}>{u.role === "admin" ? "Admin" : "Teknisi"}</span></TableCell>
+                <TableCell><span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${u.role === "admin" ? "bg-[#0047AB]/10 text-[#0047AB]" : u.role === "courier" ? "bg-orange-100 text-orange-700" : "bg-cyan-100 text-cyan-700"}`}>{u.role === "admin" ? "Admin" : u.role === "courier" ? "Kurir" : "Teknisi"}</span></TableCell>
                 <TableCell>
                   <div className="flex gap-1">
                     <button data-testid={`edit-user-${u.id}`} onClick={() => { setForm({ name: u.name, email: u.email, role: u.role, password: "" }); setEditId(u.id); setOpen(true); }} className="p-2 text-slate-500 hover:text-[#0047AB] transition-colors"><Pencil className="w-4 h-4" /></button>

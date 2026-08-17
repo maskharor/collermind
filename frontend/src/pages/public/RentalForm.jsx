@@ -91,6 +91,7 @@ export default function RentalForm() {
       fd.append("payload", JSON.stringify(payload));
       fd.append("ktp", ktp);
       const { data } = await api.post("/public/rentals", fd);
+      localStorage.setItem("cm_last_order", data.kode);
       setResult(data);
       toast.success("Pengajuan rental berhasil");
     } catch (e) {

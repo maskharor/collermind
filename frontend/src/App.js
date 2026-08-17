@@ -20,10 +20,16 @@ import Operations from "@/pages/admin/Operations";
 import Reports from "@/pages/admin/Reports";
 import Users from "@/pages/admin/Users";
 import Settings from "@/pages/admin/Settings";
+import Billings from "@/pages/admin/Billings";
+import Notifications from "@/pages/admin/Notifications";
 
 import TechLayout from "@/layouts/TechLayout";
 import TechDashboard from "@/pages/tech/TechDashboard";
 import TechTask from "@/pages/tech/TechTask";
+
+import CourierLayout from "@/layouts/CourierLayout";
+import CourierDashboard from "@/pages/courier/CourierDashboard";
+import CourierTask from "@/pages/courier/CourierTask";
 
 function App() {
   return (
@@ -48,11 +54,18 @@ function App() {
             <Route path="reports" element={<Reports />} />
             <Route path="users" element={<Users />} />
             <Route path="settings" element={<Settings />} />
+            <Route path="billings" element={<Billings />} />
+            <Route path="notifications" element={<Notifications />} />
           </Route>
 
           <Route path="/teknisi" element={<TechLayout />}>
             <Route index element={<TechDashboard />} />
             <Route path="tugas/:id" element={<TechTask />} />
+          </Route>
+
+          <Route path="/kurir" element={<CourierLayout />}>
+            <Route index element={<CourierDashboard />} />
+            <Route path="tugas/:id" element={<CourierTask />} />
           </Route>
         </Routes>
       </BrowserRouter>

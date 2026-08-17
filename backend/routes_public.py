@@ -6,11 +6,12 @@ from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from core import (
-    db, now_iso, new_id, gen_kode, rupiah, sewa_bulanan, JASA_PASANG, JASA_LEPAS,
-    DURASI_OPTIONS, STATUS_HUNIAN_OPTIONS, JENIS_RUANGAN_OPTIONS,
+    db, now_iso, new_id, gen_kode, JASA_PASANG, JASA_LEPAS,
+    DURASI_OPTIONS, STATUS_HUNIAN_OPTIONS, SLOT_TIMES,
     verify_public_access,
 )
 from storage import save_image
+from notify import notify_event
 
 router = APIRouter(tags=["public"])
 
@@ -163,6 +164,7 @@ async def submit_rental(request: Request, payload: str = Form(...), ktp: UploadF
         "details": details,
         "ktp_path": ktp_path,
         "contract_status": "none",
+        "lokasi_detail": None,
         "payment_status": "unpaid",
         "payment_method": None,
         "paid_at": None,
@@ -174,6 +176,7 @@ async def submit_rental(request: Request, payload: str = Form(...), ktp: UploadF
         "deleted_at": None,
     }
     await db.rental_orders.insert_one(order)
+    await notify_event(order_id, "order_created")
     return {"kode": kode, "estimasi": estimasi, "status": "pending"}
 
 
@@ -193,7 +196,8 @@ async def track_order(kode: str):
     if not order:
         raise HTTPException(status_code=404, detail="Kode pengajuan tidak ditemukan")
     customer = await db.customers.find_one({"id": order["customer_id"]}, {"_id": 0, "nama": 1})
-    invoice = await db.invoices.find_one({"order_id": order["id"]}, {"_id": 0, "status": 1})
+    invoice = await db.invoices.find_one({"order_id": order["id"], "jenis": "first"}, {"_id": 0, "status": 1}) or \
+        await db.invoices.find_one({"order_id": order["id"]}, {"_id": 0, "status": 1})
     return {
         "kode": order["kode"],
         "status": order["status"],
@@ -218,8 +222,10 @@ class AccessBody(BaseModel):
 
 async def full_access_payload(order, customer):
     contract = await db.contracts.find_one({"order_id": order["id"]}, {"_id": 0})
-    invoice = await db.invoices.find_one({"order_id": order["id"]}, {"_id": 0})
-    payments = await db.payments.find({"order_id": order["id"]}, {"_id": 0}).sort("created_at", -1).to_list(20)
+    invoices = await db.invoices.find({"order_id": order["id"]}, {"_id": 0}).sort([("jenis", 1), ("periode", 1)]).to_list(50)
+    first_invoice = next((i for i in invoices if i.get("jenis") == "first"), invoices[0] if invoices else None)
+    invoice_ids = [i["id"] for i in invoices]
+    payments = await db.payments.find({"invoice_id": {"$in": invoice_ids}}, {"_id": 0}).sort("created_at", -1).to_list(50) if invoice_ids else []
     schedules = await db.schedules.find({"rental_order_id": order["id"]}, {"_id": 0, "tanggal": 1, "jam": 1, "jenis_kegiatan": 1, "status": 1}).sort("tanggal", 1).to_list(50)
     req = await db.schedule_requests.find_one({"order_id": order["id"], "status": "pending"}, {"_id": 0})
     return {
@@ -235,8 +241,10 @@ async def full_access_payload(order, customer):
         "denda": order.get("denda", 0),
         "payment_status": order.get("payment_status", "unpaid"),
         "contract_status": order.get("contract_status", "none"),
+        "lokasi_detail": order.get("lokasi_detail"),
         "contract": contract,
-        "invoice": invoice,
+        "invoice": first_invoice,
+        "invoices": invoices,
         "payments": payments,
         "schedules": schedules,
         "schedule_request": req,
@@ -263,7 +271,7 @@ async def sign_contract(body: SignBody, request: Request):
         raise HTTPException(status_code=400, detail="Kontrak belum diterbitkan (menunggu verifikasi admin)")
     if contract["status"] == "signed":
         raise HTTPException(status_code=400, detail="Kontrak sudah ditandatangani")
-    ip = request.client.host if request.client else "unknown"
+    ip = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() or (request.client.host if request.client else "unknown")
     await db.contracts.update_one(
         {"id": contract["id"]},
         {"$set": {"status": "signed", "signer_name": body.signer_name, "signed_at": now_iso(), "signer_ip": ip}},
@@ -276,11 +284,67 @@ async def sign_contract(body: SignBody, request: Request):
     return {"ok": True}
 
 
+# ---------- Form lanjutan: detail lokasi ----------
+
+class LocationDetailBody(BaseModel):
+    kode: str
+    kontak: str
+    lantai: str = Field(min_length=1, max_length=20)
+    akses_lokasi: str = Field(min_length=2, max_length=100)
+    titik_indoor: str = Field(min_length=3, max_length=200)
+    titik_outdoor: str = Field(min_length=3, max_length=200)
+    sumber_listrik: str = Field(min_length=3, max_length=100)
+    catatan_lokasi: Optional[str] = ""
+
+
+@router.post("/api/public/location-detail")
+async def location_detail(body: LocationDetailBody):
+    order, customer = await verify_public_access(body.kode, body.kontak)
+    if order.get("contract_status") != "signed":
+        raise HTTPException(status_code=400, detail="Tandatangani kontrak terlebih dahulu")
+    detail = {
+        "lantai": body.lantai, "akses_lokasi": body.akses_lokasi,
+        "titik_indoor": body.titik_indoor, "titik_outdoor": body.titik_outdoor,
+        "sumber_listrik": body.sumber_listrik, "catatan_lokasi": body.catatan_lokasi or "",
+        "updated_at": now_iso(),
+    }
+    await db.rental_orders.update_one({"id": order["id"]}, {"$set": {"lokasi_detail": detail, "updated_at": now_iso()}})
+    return {"ok": True}
+
+
+# ---------- Slot teknisi tersedia ----------
+
+@router.get("/api/public/slots")
+async def available_slots(tanggal: str):
+    try:
+        d = datetime.strptime(tanggal, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Format tanggal tidak valid")
+    if d < datetime.now(timezone.utc).date():
+        raise HTTPException(status_code=400, detail="Tanggal tidak boleh di masa lalu")
+    tech_count = await db.users.count_documents({"role": "technician"})
+    if tech_count == 0:
+        return {"tanggal": tanggal, "slots": []}
+    taken = await db.schedules.find({"tanggal": tanggal, "status": "planned"}, {"_id": 0, "jam": 1, "technician_id": 1}).to_list(500)
+    tech_ids = {u["id"] for u in await db.users.find({"role": "technician"}, {"_id": 0, "id": 1}).to_list(100)}
+    per_jam = {}
+    for t in taken:
+        if t["technician_id"] in tech_ids:
+            per_jam[t["jam"]] = per_jam.get(t["jam"], 0) + 1
+    return {
+        "tanggal": tanggal,
+        "slots": [{"jam": j, "tersedia": per_jam.get(j, 0) < tech_count} for j in SLOT_TIMES],
+    }
+
+
+# ---------- Usulan jadwal (delivery / installation) ----------
+
 class ScheduleRequestBody(BaseModel):
     kode: str
     kontak: str
     tanggal: str
     jam: str
+    jenis: str = "delivery"
     catatan: Optional[str] = ""
 
     @field_validator("tanggal")
@@ -300,26 +364,56 @@ async def schedule_request(body: ScheduleRequestBody):
     order, customer = await verify_public_access(body.kode, body.kontak)
     if order.get("contract_status") != "signed":
         raise HTTPException(status_code=400, detail="Tandatangani kontrak terlebih dahulu")
-    if order["status"] not in ("verified", "scheduled"):
-        raise HTTPException(status_code=400, detail=f"Pengajuan berstatus {order['status']}, tidak dapat mengusulkan jadwal")
-    await db.schedule_requests.update_many({"order_id": order["id"], "status": "pending"}, {"$set": {"status": "replaced"}})
+    if body.jenis == "delivery":
+        if not order.get("lokasi_detail"):
+            raise HTTPException(status_code=400, detail="Isi form detail lokasi terlebih dahulu")
+        if order["status"] != "verified":
+            raise HTTPException(status_code=400, detail=f"Pengajuan berstatus {order['status']}, tidak dapat mengusulkan jadwal pengiriman")
+    elif body.jenis == "installation":
+        if order["status"] != "delivered":
+            raise HTTPException(status_code=400, detail="Jadwal instalasi dapat dipilih setelah unit diterima")
+        if body.jam not in SLOT_TIMES:
+            raise HTTPException(status_code=400, detail="Pilih slot jam yang tersedia")
+        slots = await available_slots(body.tanggal)
+        slot = next((s for s in slots["slots"] if s["jam"] == body.jam), None)
+        if not slot or not slot["tersedia"]:
+            raise HTTPException(status_code=400, detail="Slot tersebut sudah penuh, pilih slot lain")
+    else:
+        raise HTTPException(status_code=400, detail="Jenis jadwal tidak valid")
+
+    await db.schedule_requests.update_many(
+        {"order_id": order["id"], "status": "pending", "jenis": body.jenis},
+        {"$set": {"status": "replaced"}},
+    )
     doc = {
         "id": new_id(), "order_id": order["id"], "kode": order["kode"],
-        "tanggal": body.tanggal, "jam": body.jam, "catatan": body.catatan or "",
-        "status": "pending", "created_at": now_iso(),
+        "tanggal": body.tanggal, "jam": body.jam, "jenis": body.jenis,
+        "catatan": body.catatan or "", "status": "pending", "created_at": now_iso(),
     }
     await db.schedule_requests.insert_one(doc)
     doc.pop("_id", None)
     return doc
 
 
+# ---------- Upload bukti pembayaran ----------
+
 @router.post("/api/public/payments/upload")
-async def upload_payment(kode: str = Form(...), kontak: str = Form(...), catatan: str = Form(""), bukti: UploadFile = File(...)):
+async def upload_payment(
+    kode: str = Form(...),
+    kontak: str = Form(...),
+    invoice_id: str = Form(""),
+    catatan: str = Form(""),
+    bukti: UploadFile = File(...),
+):
     order, customer = await verify_public_access(kode, kontak)
-    invoice = await db.invoices.find_one({"order_id": order["id"]})
+    if invoice_id:
+        invoice = await db.invoices.find_one({"id": invoice_id, "order_id": order["id"]})
+    else:
+        invoice = await db.invoices.find_one({"order_id": order["id"], "jenis": "first"}) or \
+            await db.invoices.find_one({"order_id": order["id"]})
     if not invoice:
         raise HTTPException(status_code=400, detail="Invoice belum diterbitkan (menunggu instalasi selesai)")
-    if invoice["status"] not in ("issued", "payment_rejected"):
+    if invoice["status"] not in ("issued", "payment_rejected", "overdue"):
         raise HTTPException(status_code=400, detail=f"Invoice berstatus {invoice['status']}")
     pending = await db.payments.find_one({"invoice_id": invoice["id"], "status": "pending"})
     if pending:

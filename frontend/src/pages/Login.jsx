@@ -23,7 +23,7 @@ export default function Login() {
     try {
       const user = await login(email, password);
       toast.success(`Selamat datang, ${user.name}`);
-      navigate(user.role === "admin" ? "/admin" : "/teknisi");
+      navigate(user.role === "admin" ? "/admin" : user.role === "courier" ? "/kurir" : "/teknisi");
     } catch (err) {
       toast.error(fmtErr(err));
     } finally {
@@ -40,7 +40,7 @@ export default function Login() {
             Coller<span className="text-cyan-500">Mind</span>
           </Link>
           <h1 className="font-heading text-3xl font-black tracking-tight text-slate-900 mt-10">Masuk Portal</h1>
-          <p className="text-slate-500 text-sm mt-2">Khusus Admin & Teknisi. Customer tidak memerlukan akun.</p>
+          <p className="text-slate-500 text-sm mt-2">Khusus Admin, Teknisi & Kurir. Customer tidak memerlukan akun.</p>
           <form onSubmit={submit} className="mt-8 space-y-5">
             <div>
               <Label htmlFor="email">Email</Label>

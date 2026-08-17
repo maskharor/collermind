@@ -1,0 +1,8 @@
+crons:
+  - name: daily-billing
+    description: "Menerbitkan tagihan bulanan yang jatuh tempo dan mengirim reminder H-3/hari-H ke customer"
+    cron: "0 1 * * *"
+    endpoint: "{{BASE_URL}}/api/cron/billing"
+    method: POST
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    enabled: true

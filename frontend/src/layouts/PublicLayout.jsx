@@ -22,16 +22,12 @@ export default function PublicLayout({ children }) {
             {user ? (
               <button
                 data-testid="nav-dashboard"
-                onClick={() => navigate(user.role === "admin" ? "/admin" : "/teknisi")}
+                onClick={() => navigate(user.role === "admin" ? "/admin" : user.role === "courier" ? "/kurir" : "/teknisi")}
                 className="ml-2 rounded-full bg-[#0047AB] text-white px-5 py-2 text-sm font-semibold hover:bg-[#003a8c] hover:-translate-y-0.5 transition-[transform,background-color] duration-200"
               >
                 Dashboard
               </button>
-            ) : (
-              <Link to="/login" data-testid="nav-login" className="ml-2 rounded-full bg-[#0047AB] text-white px-5 py-2 text-sm font-semibold hover:bg-[#003a8c] hover:-translate-y-0.5 transition-[transform,background-color] duration-200">
-                Masuk
-              </Link>
-            )}
+            ) : null}
           </nav>
         </div>
       </header>
@@ -42,6 +38,7 @@ export default function PublicLayout({ children }) {
             <Snowflake className="w-4 h-4 text-[#0047AB]" /> CollerMind
           </div>
           <p data-testid="footer-text">Solusi penyewaan AC profesional Jabodetabek — pengiriman, instalasi, dan maintenance terjadwal.</p>
+          <Link to="/login" data-testid="footer-login" className="text-xs text-slate-400 hover:text-[#0047AB] transition-colors">Masuk Internal (Admin/Teknisi/Kurir)</Link>
         </div>
       </footer>
     </div>

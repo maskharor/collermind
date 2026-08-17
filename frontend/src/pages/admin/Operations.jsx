@@ -30,7 +30,16 @@ function WorkTable({ items, tab }) {
             {tab.key === "maintenances" && (<><TableCell>{w.jenis_maintenance || "-"}</TableCell><TableCell>{w.hasil || "-"}</TableCell><TableCell>{w.kondisi_unit || "-"}</TableCell></>)}
             {tab.key === "returns" && (<><TableCell>{w.kondisi_unit || "-"}</TableCell><TableCell>{w.denda ? rupiah(w.denda) : "-"}</TableCell></>)}
             <TableCell className="max-w-[200px] truncate text-slate-500">{w.catatan || "-"}</TableCell>
-            <TableCell>{w.foto ? <a href={fileUrl(w.foto)} target="_blank" rel="noreferrer" data-testid={`work-foto-${w.id}`} className="text-[#0047AB] font-semibold text-xs hover:underline">Lihat</a> : "-"}</TableCell>
+            <TableCell>
+              <div className="flex gap-2">
+                {[["Surat Jalan", w.foto_surat_jalan], ["TTD", w.foto_ttd_penerima], ["Serah Terima", w.foto_serah_terima || (tab.key === "deliveries" ? null : w.foto)], ["Foto", tab.key !== "deliveries" ? w.foto : null]]
+                  .filter(([, p]) => p)
+                  .map(([label, p], idx) => (
+                    <a key={idx} href={fileUrl(p)} target="_blank" rel="noreferrer" data-testid={`work-foto-${w.id}-${idx}`} className="text-[#0047AB] font-semibold text-xs hover:underline whitespace-nowrap">{label}</a>
+                  ))}
+                {![w.foto, w.foto_surat_jalan, w.foto_ttd_penerima, w.foto_serah_terima].some(Boolean) && "-"}
+              </div>
+            </TableCell>
           </TableRow>
         ))}
         {items.length === 0 && <TableRow><TableCell colSpan={7} className="text-center text-slate-400 py-10">Belum ada data</TableCell></TableRow>}

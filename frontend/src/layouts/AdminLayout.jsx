@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate, Navigate } from "react-router-dom";
-import { Snowflake, LayoutDashboard, ClipboardList, Users, Snowflake as Unit, Tag, CalendarDays, PackageCheck, BarChart3, UserCog, LogOut, Menu, Landmark } from "lucide-react";
+import { Snowflake, LayoutDashboard, ClipboardList, Users, Snowflake as Unit, Tag, CalendarDays, PackageCheck, BarChart3, UserCog, LogOut, Menu, Landmark, Receipt, Bell } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 
@@ -11,6 +11,8 @@ const MENU = [
   { to: "/admin/tariffs", icon: Tag, label: "Tarif" },
   { to: "/admin/schedules", icon: CalendarDays, label: "Jadwal" },
   { to: "/admin/operations", icon: PackageCheck, label: "Operasional" },
+  { to: "/admin/billings", icon: Receipt, label: "Tagihan" },
+  { to: "/admin/notifications", icon: Bell, label: "Notifikasi" },
   { to: "/admin/reports", icon: BarChart3, label: "Laporan" },
   { to: "/admin/users", icon: UserCog, label: "User" },
   { to: "/admin/settings", icon: Landmark, label: "Pengaturan" },
@@ -31,6 +33,7 @@ export default function AdminLayout() {
 
   if (user === null) return <div className="min-h-screen flex items-center justify-center text-slate-400">Memuat...</div>;
   if (!user) return <Navigate to="/login" replace />;
+  if (user.role === "courier") return <Navigate to="/kurir" replace />;
   if (user.role !== "admin") return <Navigate to="/teknisi" replace />;
 
   return (

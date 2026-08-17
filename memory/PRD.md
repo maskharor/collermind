@@ -22,14 +22,16 @@ Digitalisasi proses bisnis penyewaan AC (sebelumnya manual via spreadsheet): pen
 - Invoice = sewa bulan 1 + jasa pasang Rp350rb + jasa lepas Rp300rb + extra pipa; lifecycle issued → waiting_payment → verified / payment_rejected
 - Akses invoice/tracking penuh: kode + No WA/email; kode format CLM-YYYYMMDD-XXXX (legacy SAC-* tetap bisa dilacak)
 
-## Implemented (2026-08-15)
-- v1: auth, master customer/unit/tarif, form rental, verifikasi+alokasi, penjadwalan, delivery/instalasi/maintenance/return, laporan, user management, tracking publik, rate limit form
-- v2 Collermind: form 8 section (tanpa NIK, consent wajib, durasi 3/6/12/24, PJ lokasi), tarif resmi Collermind + variant, kontrak digital + TTD, usulan jadwal customer + cek tabrakan teknisi, extra pipa & invoice otomatis pasca-instalasi, pembayaran transfer + upload bukti + verifikasi admin, rekening per daerah (settings), rebrand CollerMind
-- Testing: 36/36 backend pytest pass; frontend E2E form+tracking pass; E2E API full lifecycle pass (order CLM-20260815-7GXQ completed)
+## Implemented
+- v1 (2026-08-08): auth, master customer/unit/tarif, form rental, verifikasi+alokasi, penjadwalan, delivery/instalasi/maintenance/return, laporan, user management, tracking publik, rate limit form
+- v2 (2026-08-15) Collermind: form 8 section (tanpa NIK, consent wajib, durasi 3/6/12/24, PJ lokasi), tarif resmi Collermind + variant, kontrak digital + TTD, usulan jadwal customer + cek tabrakan, extra pipa & invoice otomatis pasca-instalasi, pembayaran transfer + upload bukti + verifikasi admin, rekening per daerah, rebrand CollerMind
+- v3 (2026-08-17): notifikasi email (Resend managed) + WhatsApp simulasi (copy + wa.me di admin), localStorage Order ID, landing tanpa CTA login, role courier + portal kurir (3 foto serah terima), form detail lokasi pasca-TTD, slot teknisi tersedia untuk jadwal instalasi, installation report lengkap (pipa/ducttape/kabel/helper/koordinat/edukasi), order ACTIVE hanya setelah pembayaran verified, tagihan bulanan otomatis (scheduled→issued→reminder H-3/H-0→overdue) via cron harian /api/cron/billing, halaman admin Tagihan & Notifikasi
+- Testing: v2 36/36 pytest pass; v3 E2E API pass (order CLM-20260817-8U8U → active, 5 billings)
 
 ## Kredensial
 - Admin: maskharor.prakerin@gmail.com / admin123
 - Teknisi: teknisi@sewaac.id / teknisi123
+- Kurir: kurir@sewaac.id / kurir123
 
 ## Backlog
 - P0: —

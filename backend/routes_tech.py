@@ -8,6 +8,7 @@ from core import (
     order_unit_ids, hitung_extra_pipa, create_invoice_for_order,
 )
 from storage import save_image
+from notify import notify_event
 
 router = APIRouter(prefix="/api/tech", tags=["technician"])
 Tech = Depends(require_role("technician"))
@@ -21,12 +22,13 @@ async def _enrich(s):
     s["customer_nama"] = c["nama"] if c else "-"
     s["customer_no_hp"] = c["no_hp"] if c else "-"
     s["alamat_pemasangan"] = c["alamat_pemasangan"] if c else "-"
+    s["lokasi_detail"] = o.get("lokasi_detail") if o else None
     return s
 
 
 @router.get("/schedules")
 async def my_schedules(scope: Optional[str] = None, user=Tech):
-    q = {"technician_id": user["id"]}
+    q = {"technician_id": user["id"], "jenis_kegiatan": {"$ne": "delivery"}}
     if scope == "today":
         q["tanggal"] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     schedules = await db.schedules.find(q, {"_id": 0}).sort([("tanggal", 1), ("jam", 1)]).to_list(300)
@@ -53,6 +55,11 @@ async def submit_work(
     jenis_maintenance: str = Form(""),
     denda: float = Form(0),
     total_pipa: float = Form(0),
+    ducttape_terpakai: str = Form(""),
+    kabel_terpakai: str = Form(""),
+    helper: str = Form(""),
+    koordinat: str = Form(""),
+    edukasi_customer: str = Form(""),
     catatan: str = Form(""),
     foto: Optional[UploadFile] = File(None),
     user=Tech,
@@ -76,10 +83,12 @@ async def submit_work(
     unit_ids = order_unit_ids(order)
 
     if jenis == "delivery":
+        # Legacy: pengiriman kini tugas kurir; tetap dukung jika admin assign ke teknisi lama
         if order["status"] != "scheduled":
             raise HTTPException(status_code=400, detail=f"Order berstatus {order['status']}, belum siap dikirim")
         await db.deliveries.insert_one({**base, "status": "delivered", "kondisi_unit": kondisi})
         await set_order_status(order["id"], "delivered", user["name"], catatan)
+        await notify_event(order["id"], "delivery_done")
     elif jenis == "installation":
         if order["status"] not in ("delivered", "scheduled"):
             raise HTTPException(status_code=400, detail=f"Order berstatus {order['status']}, belum siap instalasi")
@@ -89,16 +98,18 @@ async def submit_work(
         await db.installations.insert_one({
             **base, "hasil": hasil or "berhasil", "kondisi_instalasi": kondisi,
             "total_pipa_meter": total_pipa, "extra_pipa_meter": extra_meter, "biaya_extra_pipa": extra_cost,
+            "ducttape_terpakai": ducttape_terpakai, "kabel_terpakai": kabel_terpakai,
+            "helper": helper, "koordinat": koordinat, "edukasi_customer": edukasi_customer,
         })
         await set_units_status(unit_ids, "rented")
         await set_order_status(order["id"], "installed", user["name"], catatan)
-        await set_order_status(order["id"], "active", "system", "Masa sewa aktif")
         invoice = await create_invoice_for_order(order, customer or {}, total_pipa)
         await db.rental_orders.update_one(
             {"id": order["id"]},
             {"$set": {"total_biaya": invoice["total"], "updated_at": now_iso()},
-             "$push": {"status_history": {"status": "active", "at": now_iso(), "by": "system", "catatan": f"Invoice {invoice['nomor']} diterbitkan ({invoice['total']:,})"}}},
+             "$push": {"status_history": {"status": "installed", "at": now_iso(), "by": "system", "catatan": f"Invoice {invoice['nomor']} diterbitkan — menunggu pembayaran customer"}}},
         )
+        await notify_event(order["id"], "invoice_issued", {"invoice": invoice})
     elif jenis == "maintenance":
         if order["status"] not in ("active", "maintenance"):
             raise HTTPException(status_code=400, detail=f"Order berstatus {order['status']}, tidak dalam masa sewa")

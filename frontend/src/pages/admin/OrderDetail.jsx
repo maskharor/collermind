@@ -17,6 +17,7 @@ export default function OrderDetail() {
   const [data, setData] = useState(null);
   const [readyUnits, setReadyUnits] = useState([]);
   const [technicians, setTechnicians] = useState([]);
+  const [couriers, setCouriers] = useState([]);
 
   const [verifyNote, setVerifyNote] = useState("");
   const [alloc, setAlloc] = useState({});
@@ -28,6 +29,7 @@ export default function OrderDetail() {
     api.get(`/admin/orders/${id}`).then((r) => setData(r.data)).catch((e) => toast.error(fmtErr(e)));
     api.get("/admin/units", { params: { status: "ready" } }).then((r) => setReadyUnits(r.data)).catch(() => {});
     api.get("/admin/technicians").then((r) => setTechnicians(r.data)).catch(() => {});
+    api.get("/admin/couriers").then((r) => setCouriers(r.data)).catch(() => {});
   };
   useEffect(load, [id]);
 
@@ -140,6 +142,20 @@ export default function OrderDetail() {
             )}
           </section>
 
+          {order.lokasi_detail && (
+            <section className="bg-white border border-slate-200 rounded-xl p-6" data-testid="lokasi-detail-admin">
+              <h2 className="font-heading font-bold text-slate-800 mb-3">Detail Lokasi (dari Customer)</h2>
+              <div className="grid sm:grid-cols-2 gap-x-8 gap-y-2 text-sm">
+                <p><span className="text-slate-400 block text-xs">Lantai</span>{order.lokasi_detail.lantai}</p>
+                <p><span className="text-slate-400 block text-xs">Akses Lokasi</span>{order.lokasi_detail.akses_lokasi}</p>
+                <p><span className="text-slate-400 block text-xs">Titik Indoor</span>{order.lokasi_detail.titik_indoor}</p>
+                <p><span className="text-slate-400 block text-xs">Titik Outdoor</span>{order.lokasi_detail.titik_outdoor}</p>
+                <p><span className="text-slate-400 block text-xs">Sumber Listrik</span>{order.lokasi_detail.sumber_listrik}</p>
+                {order.lokasi_detail.catatan_lokasi && <p><span className="text-slate-400 block text-xs">Catatan</span>{order.lokasi_detail.catatan_lokasi}</p>}
+              </div>
+            </section>
+          )}
+
           <section className="bg-white border border-slate-200 rounded-xl p-6">
             <h2 className="font-heading font-bold text-slate-800 mb-4">Detail Sewa & Alokasi Unit</h2>
             <div className="space-y-3 text-sm">
@@ -212,8 +228,8 @@ export default function OrderDetail() {
               <h2 className="font-heading font-bold text-slate-800 mb-3">Usulan Jadwal dari Customer</h2>
               {schedule_requests.filter((r) => r.status === "pending").map((r) => (
                 <div key={r.id} className="flex items-center justify-between flex-wrap gap-2 text-sm bg-white rounded-lg p-3 border border-cyan-100">
-                  <span><b>{r.tanggal} {r.jam}</b>{r.catatan ? ` — ${r.catatan}` : ""}</span>
-                  <Button size="sm" data-testid={`use-request-${r.id}`} onClick={() => setSched({ ...sched, tanggal: r.tanggal, jam: r.jam, jenis_kegiatan: "delivery" })} className="rounded-full bg-[#0047AB] hover:bg-[#003a8c]">Gunakan</Button>
+                  <span><span className="text-xs font-semibold text-cyan-700 uppercase">{r.jenis === "installation" ? "Instalasi" : "Pengiriman"}</span> — <b>{r.tanggal} {r.jam}</b>{r.catatan ? ` — ${r.catatan}` : ""}</span>
+                  <Button size="sm" data-testid={`use-request-${r.id}`} onClick={() => setSched({ ...sched, tanggal: r.tanggal, jam: r.jam, jenis_kegiatan: r.jenis === "installation" ? "installation" : "delivery" })} className="rounded-full bg-[#0047AB] hover:bg-[#003a8c]">Gunakan</Button>
                 </div>
               ))}
             </section>
@@ -231,10 +247,10 @@ export default function OrderDetail() {
                   </Select>
                 </div>
                 <div>
-                  <Label>Teknisi</Label>
+                  <Label>{sched.jenis_kegiatan === "delivery" ? "Kurir" : "Teknisi"}</Label>
                   <Select value={sched.technician_id} onValueChange={(v) => setSched({ ...sched, technician_id: v })}>
-                    <SelectTrigger data-testid="sched-technician" className="mt-1.5"><SelectValue placeholder="Pilih teknisi" /></SelectTrigger>
-                    <SelectContent>{technicians.map((t) => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}</SelectContent>
+                    <SelectTrigger data-testid="sched-technician" className="mt-1.5"><SelectValue placeholder={sched.jenis_kegiatan === "delivery" ? "Pilih kurir" : "Pilih teknisi"} /></SelectTrigger>
+                    <SelectContent>{(sched.jenis_kegiatan === "delivery" ? couriers : technicians).map((t) => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
                 <div><Label>Tanggal</Label><Input type="date" data-testid="sched-tanggal" value={sched.tanggal} onChange={(e) => setSched({ ...sched, tanggal: e.target.value })} className="mt-1.5" /></div>
@@ -285,6 +301,23 @@ export default function OrderDetail() {
                   </div>
                 ))}
                 {payments.length === 0 && <p className="text-xs text-slate-400">Belum ada bukti pembayaran diupload.</p>}
+              </div>
+            </section>
+          )}
+
+          {data.invoices?.some((i) => i.jenis === "monthly") && (
+            <section className="bg-white border border-slate-200 rounded-xl p-6" data-testid="monthly-billings-admin">
+              <h2 className="font-heading font-bold text-slate-800 mb-4">Tagihan Bulanan</h2>
+              <div className="space-y-2 text-sm">
+                {data.invoices.filter((i) => i.jenis === "monthly").map((inv) => (
+                  <div key={inv.id} className="flex items-center justify-between border border-slate-100 rounded-lg p-3 flex-wrap gap-2" data-testid={`monthly-${inv.nomor}`}>
+                    <span>Bulan ke-{inv.periode} · tempo {inv.due_date}</span>
+                    <div className="flex items-center gap-3">
+                      <span className="font-semibold">{rupiah(inv.total)}</span>
+                      <StatusBadge status={inv.status} map={{ ...INVOICE_STATUS, scheduled: { label: "Terjadwal", cls: "bg-slate-100 text-slate-500 border-slate-200" }, overdue: { label: "Terlewat", cls: "bg-red-100 text-red-800 border-red-200" } }} />
+                    </div>
+                  </div>
+                ))}
               </div>
             </section>
           )}

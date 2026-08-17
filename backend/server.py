@@ -17,6 +17,8 @@ from routes_auth import router as auth_router
 from routes_public import router as public_router
 from routes_admin import router as admin_router
 from routes_tech import router as tech_router
+from routes_courier import router as courier_router
+from routes_cron import router as cron_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -27,6 +29,8 @@ app.include_router(auth_router)
 app.include_router(public_router)
 app.include_router(admin_router)
 app.include_router(tech_router)
+app.include_router(courier_router)
+app.include_router(cron_router)
 
 origins = [o for o in [os.environ.get("FRONTEND_URL"), "http://localhost:3000"] if o]
 extra = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip() and o.strip() != "*"]
@@ -57,6 +61,13 @@ async def seed_users():
             "password_hash": hash_password("teknisi123"), "created_at": now_iso(),
         })
         logger.info("Technician seeded")
+    courier_email = "kurir@sewaac.id"
+    if not await db.users.find_one({"email": courier_email}):
+        await db.users.insert_one({
+            "id": new_id(), "name": "Andi Kurir", "email": courier_email, "role": "courier",
+            "password_hash": hash_password("kurir123"), "created_at": now_iso(),
+        })
+        logger.info("Courier seeded")
 
 
 COLLERMIND_TARIFFS = [
@@ -119,7 +130,7 @@ async def startup():
     await db.rental_orders.create_index("status")
     await db.customers.create_index("email")
     await db.login_attempts.create_index("identifier")
-    await db.invoices.create_index("order_id", unique=True)
+    await db.invoices.create_index([("order_id", 1), ("jenis", 1), ("periode", 1)])
     await db.payments.create_index("invoice_id")
     await db.contracts.create_index("order_id", unique=True)
     await seed_users()

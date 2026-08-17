@@ -18,6 +18,8 @@ export default function Dashboard() {
   const cards = [
     { label: "Pengajuan Pending", value: stats.pending, icon: Clock, cls: "bg-amber-50 text-amber-600", testid: "stat-pending" },
     { label: "Sewa Aktif", value: stats.active, icon: CalendarDays, cls: "bg-emerald-50 text-emerald-600", testid: "stat-active" },
+    { label: "Pembayaran Menunggu Verifikasi", value: stats.pending_payments, icon: Banknote, cls: "bg-amber-50 text-amber-700", testid: "stat-pending-payments" },
+    { label: "Tagihan Terlambat", value: stats.overdue, icon: Clock, cls: "bg-red-50 text-red-600", testid: "stat-overdue" },
     { label: "Unit Ready", value: `${stats.units_ready}/${stats.units_total}`, icon: Snowflake, cls: "bg-blue-50 text-[#0047AB]", testid: "stat-units" },
     { label: "Total Pendapatan", value: rupiah(stats.revenue), icon: Banknote, cls: "bg-cyan-50 text-cyan-600", testid: "stat-revenue" },
   ];

@@ -7,10 +7,11 @@ from pydantic import BaseModel, Field, EmailStr
 from core import (
     db, now_iso, new_id, require_role, set_order_status, set_units_status,
     order_unit_ids, order_fully_allocated, ORDER_STATUSES, UNIT_STATUSES,
-    JENIS_KEGIATAN, VARIANTS, hash_password, build_contract_content,
-    get_bank_accounts, DEFAULT_BANK_ACCOUNTS, REGION_KEYWORDS,
+    JENIS_KEGIATAN, VARIANTS, ROLES, hash_password, build_contract_content,
+    get_bank_accounts, generate_monthly_billings, REGION_KEYWORDS,
 )
 from storage import get_object
+from notify import notify_event
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 Admin = Depends(require_role("admin"))
@@ -31,14 +32,16 @@ async def stats(user=Admin):
     pending = await db.rental_orders.count_documents({"status": "pending", "deleted_at": None})
     active = await db.rental_orders.count_documents({"status": {"$in": ["active", "maintenance"]}, "deleted_at": None})
     pending_payments = await db.payments.count_documents({"status": "pending"})
+    overdue = await db.invoices.count_documents({"status": "overdue"})
     units_ready = await db.air_conditioners.count_documents({"status": "ready", "deleted_at": None})
     units_total = await db.air_conditioners.count_documents({"deleted_at": None})
     today_schedules = await db.schedules.find({"tanggal": today, "status": "planned"}, {"_id": 0}).to_list(50)
     for s in today_schedules:
         o = await db.rental_orders.find_one({"id": s["rental_order_id"]}, {"_id": 0, "kode": 1})
-        t = await db.users.find_one({"id": s["technician_id"]}, {"_id": 0, "name": 1})
+        t = await db.users.find_one({"id": s["technician_id"]}, {"_id": 0, "name": 1, "role": 1})
         s["kode"] = o["kode"] if o else "-"
         s["technician_name"] = t["name"] if t else "-"
+        s["assignee_role"] = t["role"] if t else "-"
     invoices = await db.invoices.find({"status": "verified"}, {"_id": 0, "total": 1}).to_list(10000)
     revenue = sum(i.get("total", 0) for i in invoices)
     legacy = await db.rental_orders.find(
@@ -52,6 +55,7 @@ async def stats(user=Admin):
         o["customer_nama"] = c["nama"] if c else "-"
     return {
         "pending": pending, "active": active, "pending_payments": pending_payments,
+        "overdue": overdue,
         "units_ready": units_ready, "units_total": units_total, "revenue": revenue,
         "today_schedules": today_schedules, "recent_orders": recent,
     }
@@ -197,19 +201,23 @@ async def order_detail(order_id: str, user=Admin):
         verification["verified_by_name"] = v["name"] if v else "-"
     schedules = await db.schedules.find({"rental_order_id": order_id}, {"_id": 0}).sort("tanggal", 1).to_list(100)
     for s in schedules:
-        t = await db.users.find_one({"id": s["technician_id"]}, {"_id": 0, "name": 1})
+        t = await db.users.find_one({"id": s["technician_id"]}, {"_id": 0, "name": 1, "role": 1})
         s["technician_name"] = t["name"] if t else "-"
+        s["assignee_role"] = t["role"] if t else "-"
     deliveries = await db.deliveries.find({"rental_order_id": order_id}, {"_id": 0}).to_list(100)
     installations = await db.installations.find({"rental_order_id": order_id}, {"_id": 0}).to_list(100)
     maintenances = await db.maintenances.find({"rental_order_id": order_id}, {"_id": 0}).to_list(100)
     returns = await db.returns.find({"rental_order_id": order_id}, {"_id": 0}).to_list(100)
     contract = await db.contracts.find_one({"order_id": order_id}, {"_id": 0})
-    invoice = await db.invoices.find_one({"order_id": order_id}, {"_id": 0})
-    payments = await db.payments.find({"order_id": order_id}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    invoices = await db.invoices.find({"order_id": order_id}, {"_id": 0}).sort([("jenis", 1), ("periode", 1)]).to_list(50)
+    invoice = next((i for i in invoices if i.get("jenis") == "first"), invoices[0] if invoices else None)
+    invoice_ids = [i["id"] for i in invoices]
+    payments = await db.payments.find({"invoice_id": {"$in": invoice_ids}}, {"_id": 0}).sort("created_at", -1).to_list(50) if invoice_ids else []
     for p in payments:
         if p.get("verified_by"):
             v = await db.users.find_one({"id": p["verified_by"]}, {"_id": 0, "name": 1})
             p["verified_by_name"] = v["name"] if v else "-"
+        p["invoice_nomor"] = next((i["nomor"] for i in invoices if i["id"] == p["invoice_id"]), "-")
     schedule_requests = await db.schedule_requests.find({"order_id": order_id}, {"_id": 0}).sort("created_at", -1).to_list(20)
     unit_ids = order_unit_ids(order)
     units = await db.air_conditioners.find({"id": {"$in": unit_ids}}, {"_id": 0}).to_list(100) if unit_ids else []
@@ -217,7 +225,7 @@ async def order_detail(order_id: str, user=Admin):
         "order": order, "customer": customer, "verification": verification,
         "schedules": schedules, "deliveries": deliveries, "installations": installations,
         "maintenances": maintenances, "returns": returns, "units": units,
-        "contract": contract, "invoice": invoice, "payments": payments,
+        "contract": contract, "invoice": invoice, "invoices": invoices, "payments": payments,
         "schedule_requests": schedule_requests,
     }
 
@@ -254,6 +262,7 @@ async def verify_order(order_id: str, body: VerifyBody, user=Admin):
     })
     await db.rental_orders.update_one({"id": order_id}, {"$set": {"contract_status": "pending"}})
     await set_order_status(order_id, "verified", user["name"], body.catatan or "")
+    await notify_event(order_id, "contract_ready")
     return {"ok": True, "status": "verified"}
 
 
@@ -314,27 +323,39 @@ async def create_schedule(order_id: str, body: ScheduleBody, user=Admin):
         raise HTTPException(status_code=400, detail=f"Tidak dapat membuat jadwal pada status {order['status']}")
     if body.jenis_kegiatan not in JENIS_KEGIATAN:
         raise HTTPException(status_code=400, detail="Jenis kegiatan tidak valid")
+
+    required_role = "courier" if body.jenis_kegiatan == "delivery" else "technician"
+    assignee = await db.users.find_one({"id": body.technician_id})
+    if not assignee:
+        raise HTTPException(status_code=400, detail="Petugas tidak ditemukan")
+    if assignee["role"] != required_role:
+        raise HTTPException(status_code=400, detail=f"Jadwal {body.jenis_kegiatan} harus ditugaskan ke role {required_role}")
+
     if order["status"] == "verified":
         if order.get("contract_status") != "signed":
             raise HTTPException(status_code=400, detail="Kontrak belum ditandatangani customer")
         if not order_fully_allocated(order):
             raise HTTPException(status_code=400, detail="Alokasikan unit AC terlebih dahulu")
-    tech = await db.users.find_one({"id": body.technician_id, "role": "technician"})
-    if not tech:
-        raise HTTPException(status_code=400, detail="Teknisi tidak ditemukan")
+        if body.jenis_kegiatan == "delivery" and not order.get("lokasi_detail"):
+            raise HTTPException(status_code=400, detail="Customer belum mengisi form detail lokasi")
+
     conflict = await db.schedules.find_one({
         "technician_id": body.technician_id, "tanggal": body.tanggal, "jam": body.jam, "status": "planned",
     })
     if conflict:
-        raise HTTPException(status_code=400, detail="Jadwal teknisi bertabrakan pada tanggal & jam tersebut. Pilih jam lain atau hubungi CS untuk penjadwalan fleksibel.")
+        raise HTTPException(status_code=400, detail="Jadwal petugas bertabrakan pada tanggal & jam tersebut. Pilih jam lain atau hubungi CS untuk penjadwalan fleksibel.")
     doc = {
         "id": new_id(), "rental_order_id": order_id, "technician_id": body.technician_id,
+        "assignee_role": required_role,
         "tanggal": body.tanggal, "jam": body.jam, "jenis_kegiatan": body.jenis_kegiatan,
         "status": "planned", "catatan": body.catatan or "", "created_at": now_iso(),
     }
     await db.schedules.insert_one(doc)
     doc.pop("_id", None)
-    await db.schedule_requests.update_many({"order_id": order_id, "status": "pending"}, {"$set": {"status": "processed"}})
+    req_jenis = "delivery" if body.jenis_kegiatan == "delivery" else ("installation" if body.jenis_kegiatan == "installation" else None)
+    if req_jenis:
+        await db.schedule_requests.update_many({"order_id": order_id, "status": "pending", "jenis": req_jenis}, {"$set": {"status": "processed"}})
+    await db.schedule_requests.update_many({"order_id": order_id, "status": "pending", "jenis": {"$exists": False}}, {"$set": {"status": "processed"}})
     if order["status"] == "verified":
         await set_order_status(order_id, "scheduled", user["name"], f"Jadwal {body.jenis_kegiatan} dibuat")
     return doc
@@ -348,16 +369,22 @@ async def list_schedules(tanggal: Optional[str] = None, user=Admin):
     schedules = await db.schedules.find(q, {"_id": 0}).sort([("tanggal", -1), ("jam", 1)]).to_list(500)
     for s in schedules:
         o = await db.rental_orders.find_one({"id": s["rental_order_id"]}, {"_id": 0, "kode": 1, "status": 1})
-        t = await db.users.find_one({"id": s["technician_id"]}, {"_id": 0, "name": 1})
+        t = await db.users.find_one({"id": s["technician_id"]}, {"_id": 0, "name": 1, "role": 1})
         s["kode"] = o["kode"] if o else "-"
         s["order_status"] = o["status"] if o else "-"
         s["technician_name"] = t["name"] if t else "-"
+        s["assignee_role"] = t["role"] if t else "-"
     return schedules
 
 
 @router.get("/technicians")
 async def list_technicians(user=Admin):
     return await db.users.find({"role": "technician"}, {"_id": 0, "password_hash": 0}).to_list(200)
+
+
+@router.get("/couriers")
+async def list_couriers(user=Admin):
+    return await db.users.find({"role": "courier"}, {"_id": 0, "password_hash": 0}).to_list(200)
 
 
 # ---------- Operations (works) ----------
@@ -404,6 +431,8 @@ async def list_payments(status: Optional[str] = None, user=Admin):
         o = await db.rental_orders.find_one({"id": p["order_id"]}, {"_id": 0, "customer_id": 1})
         c = await db.customers.find_one({"id": o["customer_id"]}, {"_id": 0, "nama": 1}) if o else None
         p["customer_nama"] = c["nama"] if c else "-"
+        inv = await db.invoices.find_one({"id": p["invoice_id"]}, {"_id": 0, "nomor": 1})
+        p["invoice_nomor"] = inv["nomor"] if inv else "-"
         if p.get("verified_by"):
             v = await db.users.find_one({"id": p["verified_by"]}, {"_id": 0, "name": 1})
             p["verified_by_name"] = v["name"] if v else "-"
@@ -423,7 +452,16 @@ async def verify_payment(pid: str, body: PaymentReviewBody, user=Admin):
         raise HTTPException(status_code=400, detail="Pembayaran sudah diproses")
     await db.payments.update_one({"id": pid}, {"$set": {"status": "verified", "verified_by": user["id"], "admin_catatan": body.catatan or "", "verified_at": now_iso()}})
     await db.invoices.update_one({"id": p["invoice_id"]}, {"$set": {"status": "verified", "updated_at": now_iso()}})
-    await db.rental_orders.update_one({"id": p["order_id"]}, {"$set": {"payment_status": "paid", "payment_method": "transfer", "paid_at": now_iso(), "updated_at": now_iso()}})
+
+    invoice = await db.invoices.find_one({"id": p["invoice_id"]}, {"_id": 0})
+    order = await db.rental_orders.find_one({"id": p["order_id"]}, {"_id": 0})
+    if invoice and invoice.get("jenis") == "first":
+        await db.rental_orders.update_one({"id": p["order_id"]}, {"$set": {"payment_status": "paid", "payment_method": "transfer", "paid_at": now_iso(), "updated_at": now_iso()}})
+        if order and order["status"] == "installed":
+            customer = await db.customers.find_one({"id": order["customer_id"]}, {"_id": 0})
+            created = await generate_monthly_billings(order, customer or {})
+            await set_order_status(p["order_id"], "active", user["name"], f"Pembayaran terverifikasi — sewa aktif, {created} tagihan bulanan dijadwalkan")
+    await notify_event(p["order_id"], "payment_verified", {"nomor": invoice["nomor"] if invoice else ""})
     return {"ok": True}
 
 
@@ -436,7 +474,42 @@ async def reject_payment(pid: str, body: PaymentReviewBody, user=Admin):
         raise HTTPException(status_code=400, detail="Pembayaran sudah diproses")
     await db.payments.update_one({"id": pid}, {"$set": {"status": "rejected", "verified_by": user["id"], "admin_catatan": body.catatan or "", "verified_at": now_iso()}})
     await db.invoices.update_one({"id": p["invoice_id"]}, {"$set": {"status": "payment_rejected", "updated_at": now_iso()}})
+    invoice = await db.invoices.find_one({"id": p["invoice_id"]}, {"_id": 0, "nomor": 1})
+    await notify_event(p["order_id"], "payment_rejected", {"nomor": invoice["nomor"] if invoice else "", "catatan": body.catatan or ""})
     return {"ok": True}
+
+
+# ---------- Monthly billing monitoring ----------
+
+@router.get("/billings")
+async def list_billings(status: Optional[str] = None, user=Admin):
+    q = {"jenis": "monthly"}
+    if status:
+        q["status"] = status
+    invoices = await db.invoices.find(q, {"_id": 0}).sort("bill_date", -1).to_list(1000)
+    for inv in invoices:
+        o = await db.rental_orders.find_one({"id": inv["order_id"]}, {"_id": 0, "customer_id": 1, "status": 1})
+        c = await db.customers.find_one({"id": o["customer_id"]}, {"_id": 0, "nama": 1, "no_hp": 1}) if o else None
+        inv["customer_nama"] = c["nama"] if c else "-"
+        inv["customer_no_hp"] = c["no_hp"] if c else "-"
+        inv["order_status"] = o["status"] if o else "-"
+        inv["pending_payment"] = bool(await db.payments.find_one({"invoice_id": inv["id"], "status": "pending"}))
+    return invoices
+
+
+# ---------- Notifications ----------
+
+@router.get("/notifications")
+async def list_notifications(channel: Optional[str] = None, user=Admin):
+    q = {}
+    if channel:
+        q["channel"] = channel
+    notifs = await db.notifications.find(q, {"_id": 0}).sort("created_at", -1).to_list(200)
+    for n in notifs:
+        o = await db.rental_orders.find_one({"id": n["order_id"]}, {"_id": 0, "customer_id": 1})
+        c = await db.customers.find_one({"id": o["customer_id"]}, {"_id": 0, "nama": 1}) if o else None
+        n["customer_nama"] = c["nama"] if c else "-"
+    return notifs
 
 
 @router.post("/orders/{order_id}/complete")
@@ -532,7 +605,7 @@ async def list_users(user=Admin):
 
 @router.post("/users")
 async def create_user(body: UserBody, user=Admin):
-    if body.role not in ("admin", "technician"):
+    if body.role not in ROLES:
         raise HTTPException(status_code=400, detail="Role tidak valid")
     if not body.password or len(body.password) < 6:
         raise HTTPException(status_code=400, detail="Password minimal 6 karakter")
@@ -552,7 +625,7 @@ async def update_user(uid: str, body: UserBody, user=Admin):
     target = await db.users.find_one({"id": uid})
     if not target:
         raise HTTPException(status_code=404, detail="User tidak ditemukan")
-    if body.role not in ("admin", "technician"):
+    if body.role not in ROLES:
         raise HTTPException(status_code=400, detail="Role tidak valid")
     updates = {"name": body.name, "email": body.email.lower().strip(), "role": body.role}
     if body.password:
@@ -581,7 +654,7 @@ async def delete_user(uid: str, user=Admin):
 # ---------- Files (authenticated download) ----------
 
 @router.get("/files/{path:path}")
-async def download_file(path: str, user=Depends(require_role("admin", "technician"))):
+async def download_file(path: str, user=Depends(require_role("admin", "technician", "courier"))):
     record = await db.files.find_one({"storage_path": path, "is_deleted": False})
     if not record:
         raise HTTPException(status_code=404, detail="File tidak ditemukan")

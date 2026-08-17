@@ -14,7 +14,7 @@ export default function TechTask() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [data, setData] = useState(null);
-  const [form, setForm] = useState({ hasil: "", kondisi: "", jenis_maintenance: "rutin", denda: "", total_pipa: "", catatan: "" });
+  const [form, setForm] = useState({ hasil: "", kondisi: "", jenis_maintenance: "rutin", denda: "", total_pipa: "", ducttape: "", kabel: "", helper: "", koordinat: "", edukasi: "", catatan: "" });
   const [foto, setFoto] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -37,6 +37,11 @@ export default function TechTask() {
       fd.append("jenis_maintenance", form.jenis_maintenance);
       fd.append("denda", form.denda ? Number(form.denda) : 0);
       fd.append("total_pipa", form.total_pipa ? Number(form.total_pipa) : 0);
+      fd.append("ducttape_terpakai", form.ducttape);
+      fd.append("kabel_terpakai", form.kabel);
+      fd.append("helper", form.helper);
+      fd.append("koordinat", form.koordinat);
+      fd.append("edukasi_customer", form.edukasi);
       fd.append("catatan", form.catatan);
       if (foto) fd.append("foto", foto);
       await api.post(`/tech/schedules/${id}/submit`, fd);
@@ -100,6 +105,13 @@ export default function TechTask() {
                   <Input type="number" min="0" step="0.5" data-testid="work-total-pipa" value={form.total_pipa} onChange={(e) => setForm({ ...form, total_pipa: e.target.value })} className="mt-1.5 h-12" placeholder="Contoh: 4" />
                   <p className="text-xs text-slate-400 mt-1">Paket standar termasuk 3 m. Kelebihan dihitung Rp130.000/m otomatis ke invoice.</p>
                 </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div><Label>Ducttape Terpakai</Label><Input data-testid="work-ducttape" value={form.ducttape} onChange={(e) => setForm({ ...form, ducttape: e.target.value })} className="mt-1.5 h-12" placeholder="mis. 1 roll" /></div>
+                  <div><Label>Kabel Terpakai</Label><Input data-testid="work-kabel" value={form.kabel} onChange={(e) => setForm({ ...form, kabel: e.target.value })} className="mt-1.5 h-12" placeholder="mis. 4 m" /></div>
+                  <div><Label>Helper</Label><Input data-testid="work-helper" value={form.helper} onChange={(e) => setForm({ ...form, helper: e.target.value })} className="mt-1.5 h-12" placeholder="Nama helper (bila ada)" /></div>
+                  <div><Label>Koordinat Lokasi</Label><Input data-testid="work-koordinat" value={form.koordinat} onChange={(e) => setForm({ ...form, koordinat: e.target.value })} className="mt-1.5 h-12" placeholder="-6.2, 106.8" /></div>
+                </div>
+                <div><Label>Edukasi ke Customer</Label><Input data-testid="work-edukasi" value={form.edukasi} onChange={(e) => setForm({ ...form, edukasi: e.target.value })} className="mt-1.5 h-12" placeholder="mis. cara remote, jadwal cuci" /></div>
               </>
             )}
             {jenis === "maintenance" && (

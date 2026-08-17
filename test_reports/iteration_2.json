@@ -1,0 +1,23 @@
+{
+  "summary": "Regression + v3 feature testing on CollerMind. Backend: 52/52 pytest pass covering auth (3 roles: admin/teknisi/kurir), public tariffs/tracking/access/slots, admin CRUD + billings + notifications, cron /api/cron/billing (401 unauth, 200 valid secret, idempotent by run_id), courier RBAC (kurir→admin 403, kurir→tech 403, tech→courier 403, no-auth 401), schedule role guard (delivery→technician rejected 400), E2E order CLM-20260817-8U8U verified: status=active, invoice Rp1.158.000 with Tangerang Selatan rekening, contract signed, 5 monthly billings status=scheduled Bulan ke-2..6 (Rp248.000 each). Frontend: landing navbar clean (Beranda/Sewa AC/Lacak only, no Login/Masuk), footer shows 'Masuk Internal (Admin/Teknisi/Kurir)', tracking page auto-fills kode from localStorage key cm_last_order, admin /admin/billings renders 5 scheduled invoices for the E2E order, admin /admin/notifications lists 8 notifications (4 Email tercatat + 4 WhatsApp simulasi) with data-testid copy-{id} that writes real message to clipboard (toast 'Pesan disalin') and wa-{id} anchors pointing to https://wa.me/6282112223333?text=... with proper 62 prefix and generated invoice/tracking body.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "routes_cron.py cron_billing acks 2xx immediately (good) but background task run_billing_cycle has no try/except around notify_event; a single notify failure would abort the whole cycle silently. Consider per-invoice try/except + error logging.",
+    "routes_public.py available_slots does not exclude schedules of non-planned statuses (e.g., in-progress). If a technician is mid-task their slot still counts as taken only when status='planned'. Confirm 'in_progress' schedules should also be considered occupied.",
+    "Copy buttons in Notifications.jsx use data-testid=copy-{id} (good), but only icon (no aria-label). Adding aria-label='Salin pesan' would improve a11y and testability by text."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (52/52)", "frontend": "100% (landing, tracking auto-fill, /admin/billings, /admin/notifications Copy+wa.me)"},
+  "seed_data_creation": "None. Cron test uses run_id 'TEST_cron_regression_2026' (recorded in cron_runs collection; deduplicated on repeat runs). Settings test toggles bank-accounts value then restores.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "Admin maskharor.prakerin@gmail.com/admin123, Teknisi teknisi@sewaac.id/teknisi123, Kurir kurir@sewaac.id/kurir123. Active E2E order CLM-20260817-8U8U kontak 082112223333 (status=active, 5 scheduled billings).",
+  "context_for_next_testing_agent": "backend_test.py now covers 52 cases including cron/billings/notifications/courier RBAC/schedule role-guard. Public /api/public/rentals still rate-limited 5/hr per IP so success-submit is intentionally skipped in the regression suite (only 422 validation cases). Cron dedupe test reuses run_id 'TEST_cron_regression_2026'; on re-run the first call also returns deduplicated=true which the test asserts on the second call only — it will still pass (first call returns ok, dedupe key not asserted). Legacy tracking codes CLM-20260815-7GXQ (completed) and SAC-808TUJ1K remain trackable.",
+  "rca_of_the_issue": "No issues found. All v3 features (email+WA notifications, billings scheduled, cron auth+idempotency, courier RBAC + role-guard on delivery scheduling, landing without Login button, tracking auto-fill via localStorage cm_last_order, admin Copy/wa.me buttons) behave as specified."
+}

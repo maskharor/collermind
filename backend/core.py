@@ -3,9 +3,10 @@ import math
 import uuid
 import secrets
 import string
+import calendar
 import bcrypt
 import jwt
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 from fastapi import HTTPException, Request, Depends
 from motor.motor_asyncio import AsyncIOMotorClient
 
@@ -24,6 +25,8 @@ UNIT_STATUSES = ["ready", "reserved", "rented", "maintenance", "damaged"]
 
 JENIS_KEGIATAN = ["delivery", "inspection", "installation", "maintenance", "dismantling", "return"]
 
+ROLES = ["admin", "technician", "courier"]
+
 # Business rules Collermind
 JASA_PASANG = 350000
 JASA_LEPAS = 300000
@@ -33,6 +36,8 @@ DURASI_OPTIONS = [3, 6, 12, 24]
 STATUS_HUNIAN_OPTIONS = ["Kos", "Kontrakan", "Rumah", "Ruko", "Kantor"]
 JENIS_RUANGAN_OPTIONS = ["Kamar", "Ruang Tamu", "Ruang Kantor", "Ruang Usaha", "Lainnya"]
 VARIANTS = ["Standart", "Inverter"]
+SLOT_TIMES = ["08:00", "10:00", "13:00", "15:00"]
+BILLING_DUE_DAYS = 7
 
 REGION_KEYWORDS = [
     (["tangerang selatan", "tangsel", "bsd", "bintaro"], "kotangsel", "Kota Tangerang Selatan"),
@@ -70,6 +75,10 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def today_str() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
 def new_id() -> str:
     return str(uuid.uuid4())
 
@@ -100,6 +109,14 @@ def sewa_bulanan(order: dict) -> float:
     return sum(d.get("harga", 0) * d.get("quantity", 0) for d in order.get("details", []))
 
 
+def add_months(d: date, months: int) -> date:
+    month = d.month - 1 + months
+    year = d.year + month // 12
+    month = month % 12 + 1
+    day = min(d.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
 async def get_bank_accounts() -> dict:
     doc = await db.settings.find_one({"key": "bank_accounts"}, {"_id": 0})
     if doc:
@@ -123,7 +140,9 @@ async def create_invoice_for_order(order: dict, customer: dict, total_pipa: floa
     accounts = await get_bank_accounts()
     rekening = accounts.get(region_key) or accounts["default"]
 
-    existing = await db.invoices.find_one({"order_id": order["id"]})
+    existing = await db.invoices.find_one({"order_id": order["id"], "jenis": "first"})
+    if not existing:
+        existing = await db.invoices.find_one({"order_id": order["id"]})
     if existing:
         return existing
 
@@ -132,6 +151,8 @@ async def create_invoice_for_order(order: dict, customer: dict, total_pipa: floa
         "nomor": f"INV-{order['kode']}",
         "order_id": order["id"],
         "kode": order["kode"],
+        "jenis": "first",
+        "periode": 1,
         "items": items,
         "total": total,
         "total_pipa_meter": total_pipa,
@@ -140,6 +161,8 @@ async def create_invoice_for_order(order: dict, customer: dict, total_pipa: floa
         "status": "issued",
         "rekening": rekening,
         "region": region_label,
+        "bill_date": today_str(),
+        "due_date": (date.fromisoformat(today_str()) + timedelta(days=BILLING_DUE_DAYS)).isoformat(),
         "issued_at": now_iso(),
         "created_at": now_iso(),
         "updated_at": now_iso(),
@@ -147,6 +170,40 @@ async def create_invoice_for_order(order: dict, customer: dict, total_pipa: floa
     await db.invoices.insert_one(invoice)
     invoice.pop("_id", None)
     return invoice
+
+
+async def generate_monthly_billings(order: dict, customer: dict):
+    """Buat tagihan bulan ke-2..N berstatus scheduled saat order aktif."""
+    start = datetime.strptime(order["tanggal_mulai"], "%Y-%m-%d").date()
+    sewa = sewa_bulanan(order)
+    region_key, region_label = detect_region(customer.get("alamat_pemasangan", ""))
+    accounts = await get_bank_accounts()
+    rekening = accounts.get(region_key) or accounts["default"]
+    created = 0
+    for m in range(2, int(order["durasi_sewa"]) + 1):
+        if await db.invoices.find_one({"order_id": order["id"], "jenis": "monthly", "periode": m}):
+            continue
+        bill_date = add_months(start, m - 1)
+        await db.invoices.insert_one({
+            "id": new_id(),
+            "nomor": f"INV-{order['kode']}-B{m:02d}",
+            "order_id": order["id"],
+            "kode": order["kode"],
+            "jenis": "monthly",
+            "periode": m,
+            "items": [{"label": f"Sewa bulan ke-{m}", "amount": sewa}],
+            "total": sewa,
+            "status": "scheduled",
+            "rekening": rekening,
+            "region": region_label,
+            "bill_date": bill_date.isoformat(),
+            "due_date": (bill_date + timedelta(days=BILLING_DUE_DAYS)).isoformat(),
+            "issued_at": None,
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
+        })
+        created += 1
+    return created
 
 
 def build_contract_content(order: dict, customer: dict) -> dict:
