@@ -316,42 +316,62 @@ class ScheduleBody(BaseModel):
     catatan: Optional[str] = ""
 
 
-@router.post("/orders/{order_id}/schedules")
-async def create_schedule(order_id: str, body: ScheduleBody, user=Admin):
-    order = await get_order(order_id)
+JENIS_LABEL = {"delivery": "Pengiriman", "inspection": "Inspeksi", "installation": "Instalasi", "maintenance": "Maintenance", "dismantling": "Pembongkaran", "return": "Pengembalian"}
+ONE_TIME_KEGIATAN = ("delivery", "installation", "dismantling", "return")
+
+
+def _validate_order_for_schedule(order: dict, jenis: str):
     if order["status"] not in ("verified", "scheduled", "delivered", "active", "maintenance"):
         raise HTTPException(status_code=400, detail=f"Tidak dapat membuat jadwal pada status {order['status']}")
-    if body.jenis_kegiatan not in JENIS_KEGIATAN:
+    if jenis not in JENIS_KEGIATAN:
         raise HTTPException(status_code=400, detail="Jenis kegiatan tidak valid")
-
-    required_role = "courier" if body.jenis_kegiatan == "delivery" else "technician"
-    assignee = await db.users.find_one({"id": body.technician_id})
-    if not assignee:
-        raise HTTPException(status_code=400, detail="Petugas tidak ditemukan")
-    if assignee["role"] != required_role:
-        raise HTTPException(status_code=400, detail=f"Jadwal {body.jenis_kegiatan} harus ditugaskan ke role {required_role}")
-
     if order["status"] == "verified":
         if order.get("contract_status") != "signed":
             raise HTTPException(status_code=400, detail="Kontrak belum ditandatangani customer")
         if not order_fully_allocated(order):
             raise HTTPException(status_code=400, detail="Alokasikan unit AC terlebih dahulu")
-        if body.jenis_kegiatan == "delivery" and not order.get("lokasi_detail"):
+        if jenis == "delivery" and not order.get("lokasi_detail"):
             raise HTTPException(status_code=400, detail="Customer belum mengisi form detail lokasi")
 
+
+async def _validate_schedule_assignee(technician_id: str, jenis: str):
+    required_role = "courier" if jenis == "delivery" else "technician"
+    assignee = await db.users.find_one({"id": technician_id})
+    if not assignee:
+        raise HTTPException(status_code=400, detail="Petugas tidak ditemukan")
+    if assignee["role"] != required_role:
+        raise HTTPException(status_code=400, detail=f"Jadwal {jenis} harus ditugaskan ke role {required_role}")
+    return required_role
+
+
+async def _check_schedule_conflicts(order_id: str, body: "ScheduleBody"):
     conflict = await db.schedules.find_one({
         "technician_id": body.technician_id, "tanggal": body.tanggal, "jam": body.jam, "status": "planned",
     })
     if conflict:
         raise HTTPException(status_code=400, detail="Jadwal petugas bertabrakan pada tanggal & jam tersebut. Pilih jam lain atau hubungi CS untuk penjadwalan fleksibel.")
-
-    JENIS_LABEL = {"delivery": "Pengiriman", "inspection": "Inspeksi", "installation": "Instalasi", "maintenance": "Maintenance", "dismantling": "Pembongkaran", "return": "Pengembalian"}
-    if body.jenis_kegiatan in ("delivery", "installation", "dismantling", "return"):
+    if body.jenis_kegiatan in ONE_TIME_KEGIATAN:
         done_exists = await db.schedules.find_one({
             "rental_order_id": order_id, "jenis_kegiatan": body.jenis_kegiatan, "status": "done",
         })
         if done_exists:
             raise HTTPException(status_code=400, detail=f"{JENIS_LABEL[body.jenis_kegiatan]} telah selesai dilakukan untuk order ini")
+
+
+async def _mark_requests_processed(order_id: str, jenis: str):
+    req_jenis = "delivery" if jenis == "delivery" else ("installation" if jenis == "installation" else None)
+    if req_jenis:
+        await db.schedule_requests.update_many({"order_id": order_id, "status": "pending", "jenis": req_jenis}, {"$set": {"status": "processed"}})
+    await db.schedule_requests.update_many({"order_id": order_id, "status": "pending", "jenis": {"$exists": False}}, {"$set": {"status": "processed"}})
+
+
+@router.post("/orders/{order_id}/schedules")
+async def create_schedule(order_id: str, body: ScheduleBody, user=Admin):
+    order = await get_order(order_id)
+    _validate_order_for_schedule(order, body.jenis_kegiatan)
+    required_role = await _validate_schedule_assignee(body.technician_id, body.jenis_kegiatan)
+    await _check_schedule_conflicts(order_id, body)
+
     doc = {
         "id": new_id(), "rental_order_id": order_id, "technician_id": body.technician_id,
         "assignee_role": required_role,
@@ -360,10 +380,7 @@ async def create_schedule(order_id: str, body: ScheduleBody, user=Admin):
     }
     await db.schedules.insert_one(doc)
     doc.pop("_id", None)
-    req_jenis = "delivery" if body.jenis_kegiatan == "delivery" else ("installation" if body.jenis_kegiatan == "installation" else None)
-    if req_jenis:
-        await db.schedule_requests.update_many({"order_id": order_id, "status": "pending", "jenis": req_jenis}, {"$set": {"status": "processed"}})
-    await db.schedule_requests.update_many({"order_id": order_id, "status": "pending", "jenis": {"$exists": False}}, {"$set": {"status": "processed"}})
+    await _mark_requests_processed(order_id, body.jenis_kegiatan)
     if order["status"] == "verified":
         await set_order_status(order_id, "scheduled", user["name"], f"Jadwal {body.jenis_kegiatan} dibuat")
     return doc
@@ -561,12 +578,15 @@ async def reports(user=Admin):
         unit_dist[u["status"]] = unit_dist.get(u["status"], 0) + 1
 
     maint_count = await db.maintenances.count_documents({})
+    total_revenue = 0.0
+    for payment in verified_payments:
+        total_revenue += payment.get("jumlah", 0)
     return {
         "status_distribution": [{"status": k, "jumlah": v} for k, v in status_dist.items() if v],
         "revenue_by_month": revenue_by_month,
         "unit_distribution": [{"status": k, "jumlah": v} for k, v in unit_dist.items()],
         "total_orders": len(orders),
-        "total_revenue": sum(p.get("jumlah", 0) for p in verified_payments),
+        "total_revenue": total_revenue,
         "maintenance_count": maint_count,
     }
 

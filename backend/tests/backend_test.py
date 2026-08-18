@@ -28,12 +28,12 @@ API = f"{BASE_URL}/api"
 backend_env = dotenv_values("/app/backend/.env")
 CRON_SECRET = backend_env.get("WEBHOOK_CRON_SECRET") or os.environ.get("WEBHOOK_CRON_SECRET")
 
-ADMIN_EMAIL = "maskharor.prakerin@gmail.com"
-ADMIN_PASSWORD = "admin123"
-TECH_EMAIL = "teknisi@sewaac.id"
-TECH_PASSWORD = "teknisi123"
-COURIER_EMAIL = "kurir@sewaac.id"
-COURIER_PASSWORD = "kurir123"
+ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL") or backend_env.get("TEST_ADMIN_EMAIL")
+ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD") or backend_env.get("TEST_ADMIN_PASSWORD")
+TECH_EMAIL = os.environ.get("TEST_TECH_EMAIL") or backend_env.get("TEST_TECH_EMAIL")
+TECH_PASSWORD = os.environ.get("TEST_TECH_PASSWORD") or backend_env.get("TEST_TECH_PASSWORD")
+COURIER_EMAIL = os.environ.get("TEST_COURIER_EMAIL") or backend_env.get("TEST_COURIER_EMAIL")
+COURIER_PASSWORD = os.environ.get("TEST_COURIER_PASSWORD") or backend_env.get("TEST_COURIER_PASSWORD")
 
 # Active v3 E2E order
 E2E_KODE = "CLM-20260817-8U8U"
@@ -160,7 +160,7 @@ class TestPublic:
         assert data["kode"] == E2E_KODE
         assert data["status"] == "active"
         inv = data.get("invoice")
-        assert inv is not None
+        assert inv
         assert inv["status"] == "verified"
         assert inv["total"] == E2E_INVOICE_TOTAL, f"expected {E2E_INVOICE_TOTAL} got {inv['total']}"
         # region contains Tangsel/Tangerang Selatan
@@ -332,7 +332,7 @@ class TestBillingsAndNotifications:
         # Fetch orders to find our E2E order id
         orders = admin_session.get(f"{API}/admin/orders").json()
         e2e = next((o for o in orders if o["kode"] == E2E_KODE), None)
-        assert e2e is not None, f"E2E order {E2E_KODE} not found in admin orders"
+        assert e2e, f"E2E order {E2E_KODE} not found in admin orders"
         assert e2e["status"] == "active", f"expected active got {e2e['status']}"
         my_bills = [b for b in billings if b["order_id"] == e2e["id"]]
         assert len(my_bills) == 5, f"expected 5 scheduled billings, got {len(my_bills)}"
@@ -369,7 +369,7 @@ class TestScheduleRoleGuard:
         # Use E2E order (active status), delivery to technician should be rejected either by role or by status.
         orders = admin_session.get(f"{API}/admin/orders").json()
         e2e = next((o for o in orders if o["kode"] == E2E_KODE), None)
-        assert e2e is not None
+        assert e2e
         body = {
             "technician_id": tech_id,
             "tanggal": "2027-02-01",
@@ -427,13 +427,13 @@ class TestCronBilling:
         r1 = requests.post(f"{API}/cron/billing", json={"run_id": run_id}, headers=headers)
         assert r1.status_code == 200, r1.text
         d1 = r1.json()
-        assert d1.get("ok") is True
+        assert d1.get("ok")
         # Second call with same run_id → deduplicated
         r2 = requests.post(f"{API}/cron/billing", json={"run_id": run_id}, headers=headers)
         assert r2.status_code == 200
         d2 = r2.json()
-        assert d2.get("ok") is True
-        assert d2.get("deduplicated") is True, d2
+        assert d2.get("ok")
+        assert d2.get("deduplicated"), d2
 
 
 # ---------------- Settings persistence ----------------
@@ -528,7 +528,7 @@ class TestScheduleDeliveryDoneGuard:
     def test_re_schedule_delivery_after_done_rejected(self, admin_session):
         orders = admin_session.get(f"{API}/admin/orders").json()
         aiqx = next((o for o in orders if o["kode"] == "CLM-20260817-AIQX"), None)
-        assert aiqx is not None, "Order AIQX not found"
+        assert aiqx, "Order AIQX not found"
         couriers = admin_session.get(f"{API}/admin/couriers").json()
         assert couriers, "No courier seeded"
         cid = couriers[0]["id"]

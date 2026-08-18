@@ -30,16 +30,15 @@ EMSIFA = "https://www.emsifa.com/api-wilayah-indonesia/api"
 
 async def _wilayah(path: str):
     cache = await db.wilayah_cache.find_one({"key": path}, {"_id": 0})
-    if cache:
-        return cache["data"]
+    data = None
     try:
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.get(f"{EMSIFA}/{path}")
         resp.raise_for_status()
         data = resp.json()
     except Exception:
-        if cache:
-            return cache["data"]
+        data = cache["data"] if cache else None
+    if not data:
         raise HTTPException(status_code=503, detail="Data wilayah tidak dapat dimuat, coba lagi")
     await db.wilayah_cache.update_one({"key": path}, {"$set": {"key": path, "data": data}}, upsert=True)
     return data
@@ -128,40 +127,9 @@ class RentalPayload(BaseModel):
 @router.post("/api/public/rentals")
 async def submit_rental(request: Request, payload: str = Form(...), ktp: UploadFile = File(...)):
     ip = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() or (request.client.host if request.client else "unknown")
-    one_hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-    recent = await db.rental_orders.count_documents({"ip": ip, "created_at": {"$gte": one_hour_ago}})
-    if recent >= 5:
-        raise HTTPException(status_code=429, detail="Terlalu banyak pengajuan. Coba lagi nanti.")
-
-    try:
-        data = RentalPayload(**json.loads(payload))
-    except Exception as e:
-        msg = "Data tidak valid"
-        if hasattr(e, "errors"):
-            try:
-                msg = "; ".join(f"{'.'.join(str(x) for x in er['loc'])}: {er['msg']}" for er in e.errors())
-            except Exception:
-                pass
-        raise HTTPException(status_code=422, detail=msg)
-
-    details = []
-    for item in data.items:
-        tariff = await db.tariffs.find_one({"id": item.tariff_id, "aktif": True}, {"_id": 0})
-        if not tariff:
-            raise HTTPException(status_code=400, detail="Tipe AC tidak ditemukan")
-        details.append({
-            "tariff_id": tariff["id"],
-            "tipe": tariff.get("tipe", "Split"),
-            "kapasitas": tariff["kapasitas"],
-            "variant": tariff.get("variant", "Standart"),
-            "nama": tariff["nama"],
-            "quantity": item.quantity,
-            "harga": tariff["harga_per_bulan"],
-            "harga_sewa_bulanan": tariff["harga_per_bulan"],
-            "subtotal": tariff["harga_per_bulan"] * item.quantity,
-            "unit_ids": [],
-        })
-
+    await _check_rate_limit(ip)
+    data = _parse_rental_payload(payload)
+    details = await _build_order_details(data.items)
     alamat_pemasangan = f"{data.detail_alamat}, Kel. {data.kelurahan}, Kec. {data.kecamatan}, {data.kota_kab}, {data.provinsi}"
 
     sewa = sum(d["subtotal"] for d in details)
@@ -175,29 +143,7 @@ async def submit_rental(request: Request, payload: str = Form(...), ktp: UploadF
     }
 
     ktp_path = await save_image(db, ktp, "ktp")
-
-    email = data.email.lower().strip()
-    customer = await db.customers.find_one({"$or": [{"email": email}, {"no_hp": data.no_hp}], "deleted_at": None})
-    cust_fields = {
-        "nama": data.nama, "email": email, "no_hp": data.no_hp,
-        "alamat_ktp": data.alamat_ktp, "alamat_pemasangan": alamat_pemasangan,
-        "provinsi": data.provinsi, "kota_kab": data.kota_kab,
-        "kecamatan": data.kecamatan, "kelurahan": data.kelurahan,
-        "status_hunian": data.status_hunian,
-        "nama_pj_lokasi": data.nama_pj_lokasi, "no_hp_pj_lokasi": data.no_hp_pj_lokasi,
-        "data_consent": True, "data_consent_at": now_iso(),
-        "foto_ktp_path": ktp_path,
-        "updated_at": now_iso(),
-    }
-    if customer:
-        await db.customers.update_one({"id": customer["id"]}, {"$set": cust_fields})
-        customer_id = customer["id"]
-    else:
-        customer_id = new_id()
-        await db.customers.insert_one({
-            "id": customer_id, "nik": None, **cust_fields,
-            "created_at": now_iso(), "deleted_at": None,
-        })
+    customer_id = await _upsert_customer(data, ktp_path, alamat_pemasangan)
 
     order_id = new_id()
     kode = gen_kode()
@@ -231,6 +177,72 @@ async def submit_rental(request: Request, payload: str = Form(...), ktp: UploadF
     await db.rental_orders.insert_one(order)
     await notify_event(order_id, "order_created")
     return {"kode": kode, "estimasi": estimasi, "status": "pending"}
+
+
+async def _check_rate_limit(ip: str):
+    one_hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    recent = await db.rental_orders.count_documents({"ip": ip, "created_at": {"$gte": one_hour_ago}})
+    if recent >= 5:
+        raise HTTPException(status_code=429, detail="Terlalu banyak pengajuan. Coba lagi nanti.")
+
+
+def _parse_rental_payload(payload: str) -> "RentalPayload":
+    try:
+        return RentalPayload(**json.loads(payload))
+    except Exception as e:
+        msg = "Data tidak valid"
+        if hasattr(e, "errors"):
+            try:
+                msg = "; ".join(f"{'.'.join(str(x) for x in er['loc'])}: {er['msg']}" for er in e.errors())
+            except Exception:
+                pass
+        raise HTTPException(status_code=422, detail=msg)
+
+
+async def _build_order_details(items) -> list:
+    details = []
+    for item in items:
+        tariff = await db.tariffs.find_one({"id": item.tariff_id, "aktif": True}, {"_id": 0})
+        if not tariff:
+            raise HTTPException(status_code=400, detail="Tipe AC tidak ditemukan")
+        details.append({
+            "tariff_id": tariff["id"],
+            "tipe": tariff.get("tipe", "Split"),
+            "kapasitas": tariff["kapasitas"],
+            "variant": tariff.get("variant", "Standart"),
+            "nama": tariff["nama"],
+            "quantity": item.quantity,
+            "harga": tariff["harga_per_bulan"],
+            "harga_sewa_bulanan": tariff["harga_per_bulan"],
+            "subtotal": tariff["harga_per_bulan"] * item.quantity,
+            "unit_ids": [],
+        })
+    return details
+
+
+async def _upsert_customer(data: "RentalPayload", ktp_path: str, alamat_pemasangan: str) -> str:
+    email = data.email.lower().strip()
+    customer = await db.customers.find_one({"$or": [{"email": email}, {"no_hp": data.no_hp}], "deleted_at": None})
+    cust_fields = {
+        "nama": data.nama, "email": email, "no_hp": data.no_hp,
+        "alamat_ktp": data.alamat_ktp, "alamat_pemasangan": alamat_pemasangan,
+        "provinsi": data.provinsi, "kota_kab": data.kota_kab,
+        "kecamatan": data.kecamatan, "kelurahan": data.kelurahan,
+        "status_hunian": data.status_hunian,
+        "nama_pj_lokasi": data.nama_pj_lokasi, "no_hp_pj_lokasi": data.no_hp_pj_lokasi,
+        "data_consent": True, "data_consent_at": now_iso(),
+        "foto_ktp_path": ktp_path,
+        "updated_at": now_iso(),
+    }
+    if customer:
+        await db.customers.update_one({"id": customer["id"]}, {"$set": cust_fields})
+        return customer["id"]
+    customer_id = new_id()
+    await db.customers.insert_one({
+        "id": customer_id, "nik": None, **cust_fields,
+        "created_at": now_iso(), "deleted_at": None,
+    })
+    return customer_id
 
 
 # ---------- Tracking (ringkasan publik, data disamarkan) ----------
