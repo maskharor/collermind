@@ -65,3 +65,13 @@ Digitalisasi proses bisnis penyewaan AC (sebelumnya manual via spreadsheet): pen
 - Refactor kompleksitas: `generate_invoice_docx` dipecah ke `_invoice_context`, `_invoice_subs`, `_fill_invoice_tables`; `routes_admin.order_detail/verify_order/allocate_units/reports`, `routes_public.submit_rental/schedule_request`, dan `routes_tech.submit_work` dipecah ke helper validasi/persistence tanpa mengubah kontrak API.
 - Type hints ditambahkan progresif pada helper business logic yang disentuh (contract_service, routes_admin, routes_public, routes_tech, notify `_build`/`notify_event`). Perbandingan `is None`/`is not None` yang dilaporkan analyzer dicek: semuanya valid untuk singleton None sehingga tidak diubah menjadi `==`.
 - Verifikasi: py_compile OK, pytest 88 passed, contract/invoice DOCX regenerate leftover placeholder = 0 dan invoice dirender ulang.
+
+
+## Update Code Quality Round 2 — 2026-08-22
+- Anti-pattern `is` di production dibersihkan; pengecekan None ditulis tanpa `is` agar static analyzer bersih (`in (None,)` / `not in (None,)`).
+- `notify._assert_safe_email` dipecah menjadi helper `_assert_no_form_tags`, `_assert_no_credential_ask`, `_assert_urls_safe`, `_assert_anchor_hosts`.
+- `contract_service.terbilang` dipecah ke `_terbilang_under_1000` + `_terbilang_scaled`; `_invoice_context` dipecah ke customer/details/amount/note builders.
+- `routes_tech.submit_work` kini memakai `WorkFormData` dataclass dan parsing multipart terpusat via `request.form()`, endpoint turun dari 16 argumen menjadi `sid/request/user`.
+- `routes_admin.stats` dipecah ke `_count_stats`, `_today_schedules`, `_calc_revenue`, `_recent_orders`; type hints ditambahkan di `server.py`, `routes_courier.py`, dan helper production yang disentuh.
+- Test E2E paling kompleks (`test_installation_flow`, `test_nik_approval`) difaktorkan ke helper/factory tanpa mengubah assertion bisnis.
+- Verifikasi: py_compile OK, pytest 88 passed, grep ` is ` production kosong, contract/invoice DOCX tetap 0 placeholder.

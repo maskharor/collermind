@@ -197,3 +197,7 @@
 ## agent_communication:
 ##     - agent: "main"
 ##       - message: "Code quality review diterapkan. Backend py_compile OK; pytest 88 passed. Generate contract/invoice tetap bersih (0 placeholder). Catatan: temuan operator `is` hanya untuk None (`is None`/`is not None`) yang memang benar secara Python, jadi tidak diganti."
+
+## agent_communication:
+##     - agent: "main"
+##       - message: "Code quality round 2 diterapkan: anti-pattern `is` dibersihkan, notify/contract_service/routes_tech/routes_admin/server/routes_courier direfactor + type hints progresif, test_installation_flow & test_nik_approval difaktorkan. Verifikasi: pytest 88 passed, grep ` is ` production kosong, dokumen contract/invoice tetap 0 placeholder."

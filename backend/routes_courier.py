@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
@@ -10,7 +11,7 @@ router = APIRouter(prefix="/api/courier", tags=["courier"])
 Courier = Depends(require_role("courier"))
 
 
-async def _enrich(s):
+async def _enrich(s: dict) -> dict:
     o = await db.rental_orders.find_one({"id": s["rental_order_id"]}, {"_id": 0})
     c = await db.customers.find_one({"id": o["customer_id"]}, {"_id": 0, "nama": 1, "no_hp": 1, "alamat_pemasangan": 1}) if o else None
     s["kode"] = o["kode"] if o else "-"
@@ -22,8 +23,7 @@ async def _enrich(s):
 
 
 @router.get("/schedules")
-async def my_deliveries(scope: Optional[str] = None, user=Courier):
-    from datetime import datetime, timezone
+async def my_deliveries(scope: Optional[str] = None, user=Courier) -> list:
     q = {"technician_id": user["id"], "jenis_kegiatan": "delivery"}
     if scope == "today":
         q["tanggal"] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -32,7 +32,7 @@ async def my_deliveries(scope: Optional[str] = None, user=Courier):
 
 
 @router.get("/schedules/{sid}")
-async def delivery_detail(sid: str, user=Courier):
+async def delivery_detail(sid: str, user=Courier) -> dict:
     s = await db.schedules.find_one({"id": sid, "technician_id": user["id"], "jenis_kegiatan": "delivery"}, {"_id": 0})
     if not s:
         raise HTTPException(status_code=404, detail="Tugas pengiriman tidak ditemukan")
@@ -51,7 +51,7 @@ async def submit_delivery(
     foto_surat_jalan: UploadFile = File(...),
     foto_serah_terima: UploadFile = File(...),
     user=Courier,
-):
+) -> dict:
     s = await db.schedules.find_one({"id": sid, "technician_id": user["id"], "jenis_kegiatan": "delivery"}, {"_id": 0})
     if not s:
         raise HTTPException(status_code=404, detail="Tugas pengiriman tidak ditemukan")

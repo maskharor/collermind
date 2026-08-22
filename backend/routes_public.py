@@ -308,7 +308,7 @@ async def _delivery_info(order: dict):
         return None, None
     try:
         dt = datetime.fromisoformat(str(delivered_at).replace("Z", "+00:00"))
-        if dt.tzinfo is None:
+        if dt.tzinfo in (None,):
             dt = dt.replace(tzinfo=timezone.utc)
         local = dt.astimezone(JAKARTA)
         return local.isoformat(), (local + timedelta(days=1)).date().isoformat()

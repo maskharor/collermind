@@ -35,10 +35,8 @@ def admin():
     return s
 
 
-def test_verify_with_nik_persists_and_renders_in_contract(admin):
-    tariffs = requests.get(f"{API}/public/tariffs").json()
-    assert tariffs
-    payload = {
+def _payload(tariff_id: str) -> dict:
+    return {
         "nama": "TEST NIK Gate",
         "email": f"test_nikgate_{SUFFIX}@example.com",
         "no_hp": f"0812{SUFFIX}99",
@@ -56,8 +54,11 @@ def test_verify_with_nik_persists_and_renders_in_contract(admin):
         "nama_pj_lokasi": "Pak RT Test",
         "no_hp_pj_lokasi": "081222233344",
         "data_consent": True,
-        "items": [{"tariff_id": tariffs[0]["id"], "quantity": 1}],
+        "items": [{"tariff_id": tariff_id, "quantity": 1}],
     }
+
+
+def _submit_rental(payload: dict) -> str:
     r = requests.post(
         f"{API}/public/rentals",
         data={"payload": json.dumps(payload)},
@@ -66,33 +67,48 @@ def test_verify_with_nik_persists_and_renders_in_contract(admin):
     if r.status_code == 429:
         pytest.skip("rate limited (5 submissions/hour per IP)")
     assert r.status_code == 200, r.text[:300]
-    kode = r.json()["kode"]
+    return r.json()["kode"]
 
+
+def _find_order(admin, kode: str) -> dict:
     orders = admin.get(f"{API}/admin/orders", params={"q": kode}).json()
     orders = orders if isinstance(orders, list) else orders.get("items", [])
-    order = next(o for o in orders if o["kode"] == kode)
+    return next(o for o in orders if o["kode"] == kode)
 
-    # 1) approve without NIK rejected
+
+def _docx_text(content: bytes) -> str:
+    d = Document(io.BytesIO(content))
+    parts = [p.text for p in d.paragraphs]
+    for table in d.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                parts.append(cell.text)
+    return "\n".join(parts)
+
+
+def test_verify_with_nik_persists_and_renders_in_contract(admin):
+    tariffs = requests.get(f"{API}/public/tariffs").json()
+    assert tariffs
+    payload = _payload(tariffs[0]["id"])
+    kode = _submit_rental(payload)
+    order = _find_order(admin, kode)
+
     bad = admin.post(f"{API}/admin/orders/{order['id']}/verify", json={"hasil": "approved"})
     assert bad.status_code == 400 and "NIK" in bad.json()["detail"]
 
-    # 2) approve with valid NIK
     ok = admin.post(f"{API}/admin/orders/{order['id']}/verify", json={"hasil": "approved", "nik": NIK, "catatan": "TEST"})
     assert ok.status_code == 200, ok.text[:300]
     assert ok.json()["status"] == "verified"
 
-    # 3) NIK persisted on customer + order verified + contract issued
     detail = admin.get(f"{API}/admin/orders/{order['id']}").json()
     assert detail["customer"]["nik"] == NIK
     assert detail["order"]["status"] == "verified"
     assert detail["order"]["contract_status"] == "pending"
     assert detail["contract"] is not None
 
-    # 4) contract DOCX shows the NIK and Tangsel branch
     doc = requests.get(f"{API}/public/contract/download", params={"kode": kode, "kontak": payload["no_hp"]})
     assert doc.status_code == 200
-    d = Document(io.BytesIO(doc.content))
-    text = "\n".join(p.text for p in d.paragraphs)
+    text = _docx_text(doc.content)
     assert NIK in text, "NIK not rendered in contract"
     assert "KOTANGSEL" in text and "1701260006922" in text
     assert not re.findall(r"\{[^}\n]{2,60}\}", text)

@@ -27,38 +27,55 @@ async def get_order(order_id: str) -> dict:
 
 # ---------- Dashboard ----------
 
-@router.get("/stats")
-async def stats(user=Admin):
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    pending = await db.rental_orders.count_documents({"status": "pending", "deleted_at": None})
-    active = await db.rental_orders.count_documents({"status": {"$in": ["active", "maintenance"]}, "deleted_at": None})
-    pending_payments = await db.payments.count_documents({"status": "pending"})
-    overdue = await db.invoices.count_documents({"status": "overdue"})
-    units_ready = await db.air_conditioners.count_documents({"status": "ready", "deleted_at": None})
-    units_total = await db.air_conditioners.count_documents({"deleted_at": None})
-    today_schedules = await db.schedules.find({"tanggal": today, "status": "planned"}, {"_id": 0}).to_list(50)
-    for s in today_schedules:
+async def _count_stats() -> dict:
+    return {
+        "pending": await db.rental_orders.count_documents({"status": "pending", "deleted_at": None}),
+        "active": await db.rental_orders.count_documents({"status": {"$in": ["active", "maintenance"]}, "deleted_at": None}),
+        "pending_payments": await db.payments.count_documents({"status": "pending"}),
+        "overdue": await db.invoices.count_documents({"status": "overdue"}),
+        "units_ready": await db.air_conditioners.count_documents({"status": "ready", "deleted_at": None}),
+        "units_total": await db.air_conditioners.count_documents({"deleted_at": None}),
+    }
+
+
+async def _today_schedules(today: str) -> list:
+    schedules = await db.schedules.find({"tanggal": today, "status": "planned"}, {"_id": 0}).to_list(50)
+    for s in schedules:
         o = await db.rental_orders.find_one({"id": s["rental_order_id"]}, {"_id": 0, "kode": 1})
         t = await db.users.find_one({"id": s["technician_id"]}, {"_id": 0, "name": 1, "role": 1})
         s["kode"] = o["kode"] if o else "-"
         s["technician_name"] = t["name"] if t else "-"
         s["assignee_role"] = t["role"] if t else "-"
+    return schedules
+
+
+async def _calc_revenue() -> float:
     invoices = await db.invoices.find({"status": "verified"}, {"_id": 0, "total": 1}).to_list(10000)
     revenue = sum(i.get("total", 0) for i in invoices)
     legacy = await db.rental_orders.find(
         {"payment_status": "paid", "deleted_at": None}, {"_id": 0, "id": 1, "total_biaya": 1, "denda": 1}
     ).to_list(10000)
     invoiced_ids = {i["order_id"] for i in await db.invoices.find({}, {"_id": 0, "order_id": 1}).to_list(10000)}
-    revenue += sum(o.get("total_biaya", 0) + o.get("denda", 0) for o in legacy if o["id"] not in invoiced_ids)
+    return revenue + sum(o.get("total_biaya", 0) + o.get("denda", 0) for o in legacy if o["id"] not in invoiced_ids)
+
+
+async def _recent_orders() -> list:
     recent = await db.rental_orders.find({"deleted_at": None}, {"_id": 0}).sort("created_at", -1).to_list(8)
     for o in recent:
         c = await db.customers.find_one({"id": o["customer_id"]}, {"_id": 0, "nama": 1})
         o["customer_nama"] = c["nama"] if c else "-"
+    return recent
+
+
+@router.get("/stats")
+async def stats(user=Admin) -> dict:
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    counts = await _count_stats()
     return {
-        "pending": pending, "active": active, "pending_payments": pending_payments,
-        "overdue": overdue,
-        "units_ready": units_ready, "units_total": units_total, "revenue": revenue,
-        "today_schedules": today_schedules, "recent_orders": recent,
+        **counts,
+        "revenue": await _calc_revenue(),
+        "today_schedules": await _today_schedules(today),
+        "recent_orders": await _recent_orders(),
     }
 
 
@@ -261,7 +278,7 @@ def _assert_verifiable(order: dict, body: VerifyBody) -> None:
 
 async def _save_customer_nik(order: dict, customer: Optional[dict], nik: str) -> None:
     await db.customers.update_one({"id": order["customer_id"]}, {"$set": {"nik": nik, "updated_at": now_iso()}})
-    if customer is not None:
+    if customer not in (None,):
         customer["nik"] = nik
 
 

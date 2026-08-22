@@ -43,7 +43,7 @@ app.add_middleware(
 )
 
 
-async def seed_users():
+async def seed_users() -> None:
     admin_email = os.environ.get("ADMIN_EMAIL")
     admin_password = os.environ.get("ADMIN_PASSWORD")
     if admin_email and admin_password:
@@ -77,7 +77,7 @@ COLLERMIND_TARIFFS = [
 ]
 
 
-async def seed_master_data():
+async def seed_master_data() -> None:
     # Tarif Collermind: nonaktifkan yang bukan produk resmi, seed yang belum ada
     await db.tariffs.update_many(
         {"nama": {"$nin": [t["nama"] for t in COLLERMIND_TARIFFS]}},
@@ -119,7 +119,7 @@ async def seed_master_data():
 
 
 @app.on_event("startup")
-async def startup():
+async def startup() -> None:
     try:
         init_storage()
         logger.info("Object storage initialized")
@@ -138,6 +138,6 @@ async def startup():
 
 
 @app.on_event("shutdown")
-async def shutdown_db_client():
+async def shutdown_db_client() -> None:
     from core import client
     client.close()

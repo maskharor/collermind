@@ -1,7 +1,8 @@
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, Request
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, Request
 
 from core import (
     db, now_iso, new_id, require_role, set_order_status, set_units_status,
@@ -14,7 +15,7 @@ router = APIRouter(prefix="/api/tech", tags=["technician"])
 Tech = Depends(require_role("technician"))
 
 
-async def _enrich(s):
+async def _enrich(s: dict) -> dict:
     o = await db.rental_orders.find_one({"id": s["rental_order_id"]}, {"_id": 0})
     c = await db.customers.find_one({"id": o["customer_id"]}, {"_id": 0, "nama": 1, "no_hp": 1, "alamat_pemasangan": 1}) if o else None
     s["kode"] = o["kode"] if o else "-"
@@ -27,7 +28,7 @@ async def _enrich(s):
 
 
 @router.get("/schedules")
-async def my_schedules(scope: Optional[str] = None, user=Tech):
+async def my_schedules(scope: Optional[str] = None, user=Tech) -> list:
     q = {"technician_id": user["id"], "jenis_kegiatan": {"$ne": "delivery"}}
     if scope == "today":
         q["tanggal"] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -36,7 +37,7 @@ async def my_schedules(scope: Optional[str] = None, user=Tech):
 
 
 @router.get("/schedules/{sid}")
-async def schedule_detail(sid: str, user=Tech):
+async def schedule_detail(sid: str, user=Tech) -> dict:
     s = await db.schedules.find_one({"id": sid, "technician_id": user["id"]}, {"_id": 0})
     if not s:
         raise HTTPException(status_code=404, detail="Jadwal tidak ditemukan")
@@ -47,7 +48,7 @@ async def schedule_detail(sid: str, user=Tech):
     return {"schedule": s, "order": order, "customer": customer, "units": units}
 
 
-async def _work_delivery(order: dict, base: dict, kondisi: str, user: dict):
+async def _work_delivery(order: dict, base: dict, kondisi: str, user: dict) -> None:
     # Legacy: pengiriman kini tugas kurir; tetap dukung jika admin assign ke teknisi lama
     if order["status"] != "scheduled":
         raise HTTPException(status_code=400, detail=f"Order berstatus {order['status']}, belum siap dikirim")
@@ -56,7 +57,7 @@ async def _work_delivery(order: dict, base: dict, kondisi: str, user: dict):
     await notify_event(order["id"], "delivery_done")
 
 
-async def _work_installation(order: dict, customer: dict, base: dict, unit_ids: list, form: dict, foto_paths: list, user: dict):
+async def _work_installation(order: dict, customer: dict, base: dict, unit_ids: list, form: dict, foto_paths: list, user: dict) -> None:
     if order["status"] not in ("delivered", "scheduled"):
         raise HTTPException(status_code=400, detail=f"Order berstatus {order['status']}, belum siap instalasi")
     pipa_terpakai = form["pipa_terpakai"]
@@ -83,7 +84,7 @@ async def _work_installation(order: dict, customer: dict, base: dict, unit_ids: 
     await notify_event(order["id"], "invoice_issued", {"invoice": invoice})
 
 
-async def _work_maintenance(order: dict, base: dict, form: dict, user: dict):
+async def _work_maintenance(order: dict, base: dict, form: dict, user: dict) -> None:
     if order["status"] not in ("active", "maintenance"):
         raise HTTPException(status_code=400, detail=f"Order berstatus {order['status']}, tidak dalam masa sewa")
     await db.maintenances.insert_one({**base, "jenis_maintenance": form["jenis_maintenance"] or "rutin", "hasil": form["hasil"], "kondisi_unit": form["kondisi"]})
@@ -91,7 +92,7 @@ async def _work_maintenance(order: dict, base: dict, form: dict, user: dict):
     await set_order_status(order["id"], "active", "system", "Maintenance selesai, sewa aktif kembali")
 
 
-async def _work_return(order: dict, base: dict, form: dict, user: dict):
+async def _work_return(order: dict, base: dict, form: dict, user: dict) -> None:
     if order["status"] not in ("active", "maintenance"):
         raise HTTPException(status_code=400, detail=f"Order berstatus {order['status']}, tidak dapat dikembalikan")
     await db.returns.insert_one({**base, "kondisi_unit": form["kondisi"], "denda": form["denda"]})
@@ -112,6 +113,54 @@ async def _load_work_context(sid: str, user: dict):
     return s, order, customer
 
 
+def _form_str(form_data, key: str) -> str:
+    value = form_data.get(key)
+    return "" if value in (None, "") or hasattr(value, "filename") else str(value)
+
+
+def _form_float(form_data, key: str) -> float:
+    try:
+        return float(_form_str(form_data, key) or 0)
+    except ValueError:
+        return 0
+
+
+@dataclass
+class WorkFormData:
+    hasil: str = ""
+    kondisi: str = ""
+    jenis_maintenance: str = ""
+    denda: float = 0
+    pipa_dibawa: float = 0
+    pipa_terpakai: float = 0
+    ducttape_terpakai: str = ""
+    kabel_terpakai: str = ""
+    helper: str = ""
+    koordinat_sesuai: str = ""
+    edukasi_customer: str = ""
+    catatan: str = ""
+
+    @classmethod
+    def from_form(cls, form_data) -> "WorkFormData":
+        return cls(
+            hasil=_form_str(form_data, "hasil"),
+            kondisi=_form_str(form_data, "kondisi"),
+            jenis_maintenance=_form_str(form_data, "jenis_maintenance"),
+            denda=_form_float(form_data, "denda"),
+            pipa_dibawa=_form_float(form_data, "pipa_dibawa"),
+            pipa_terpakai=_form_float(form_data, "pipa_terpakai"),
+            ducttape_terpakai=_form_str(form_data, "ducttape_terpakai"),
+            kabel_terpakai=_form_str(form_data, "kabel_terpakai"),
+            helper=_form_str(form_data, "helper"),
+            koordinat_sesuai=_form_str(form_data, "koordinat_sesuai"),
+            edukasi_customer=_form_str(form_data, "edukasi_customer"),
+            catatan=_form_str(form_data, "catatan"),
+        )
+
+    def as_dict(self) -> dict:
+        return self.__dict__
+
+
 async def _primary_work_photo(foto: Optional[UploadFile], foto_paths: list) -> Optional[str]:
     foto_path = await save_image(db, foto, "pekerjaan") if foto and foto.filename else None
     if foto_paths and not foto_path:
@@ -123,17 +172,6 @@ def _work_base(order: dict, user: dict, catatan: str, foto_path: Optional[str]) 
     return {
         "id": new_id(), "rental_order_id": order["id"], "technician_id": user["id"],
         "tanggal": now_iso(), "foto": foto_path, "catatan": catatan, "created_at": now_iso(),
-    }
-
-
-def _work_form_dict(hasil: str, kondisi: str, jenis_maintenance: str, denda: float, pipa_dibawa: float,
-                    pipa_terpakai: float, ducttape_terpakai: str, kabel_terpakai: str, helper: str,
-                    koordinat_sesuai: str, edukasi_customer: str) -> dict:
-    return {
-        "hasil": hasil, "kondisi": kondisi, "jenis_maintenance": jenis_maintenance,
-        "denda": denda, "pipa_dibawa": pipa_dibawa, "pipa_terpakai": pipa_terpakai,
-        "ducttape_terpakai": ducttape_terpakai, "kabel_terpakai": kabel_terpakai,
-        "helper": helper, "koordinat_sesuai": koordinat_sesuai, "edukasi_customer": edukasi_customer,
     }
 
 
@@ -151,44 +189,27 @@ async def _dispatch_work(jenis: str, order: dict, customer: dict, base: dict, fo
         raise HTTPException(status_code=400, detail="Jenis kegiatan tidak valid")
 
 
-@router.post("/schedules/{sid}/submit")
-async def submit_work(
-    sid: str,
-    hasil: str = Form(""),
-    kondisi: str = Form(""),
-    jenis_maintenance: str = Form(""),
-    denda: float = Form(0),
-    pipa_dibawa: float = Form(0),
-    pipa_terpakai: float = Form(0),
-    ducttape_terpakai: str = Form(""),
-    kabel_terpakai: str = Form(""),
-    helper: str = Form(""),
-    koordinat_sesuai: str = Form(""),
-    edukasi_customer: str = Form(""),
-    catatan: str = Form(""),
-    foto: Optional[UploadFile] = File(None),
-    request: Request = None,
-    user=Tech,
-):
-    s, order, customer = await _load_work_context(sid, user)
-    jenis = s["jenis_kegiatan"]
-    foto_paths = await _save_installation_photos(request, jenis)
-    foto_path = await _primary_work_photo(foto, foto_paths)
-    base = _work_base(order, user, catatan, foto_path)
-    form = _work_form_dict(hasil, kondisi, jenis_maintenance, denda, pipa_dibawa, pipa_terpakai,
-                           ducttape_terpakai, kabel_terpakai, helper, koordinat_sesuai, edukasi_customer)
-    await _dispatch_work(jenis, order, customer, base, form, foto_paths, user)
-    await db.schedules.update_one({"id": sid}, {"$set": {"status": "done"}})
-    return {"ok": True}
-
-
-async def _save_installation_photos(request: Request, jenis: str) -> list:
+async def _save_installation_photos_from_form(form_data, jenis: str) -> list:
     if jenis != "installation":
         return []
     from storage import MAX_DOC_PHOTO_SIZE
-    form_data = await request.form()
     paths = []
     for f in form_data.getlist("fotos"):
         if getattr(f, "filename", None):
             paths.append(await save_image(db, f, "pekerjaan", max_size=MAX_DOC_PHOTO_SIZE))
     return paths
+
+
+@router.post("/schedules/{sid}/submit")
+async def submit_work(sid: str, request: Request, user=Tech) -> dict:
+    s, order, customer = await _load_work_context(sid, user)
+    jenis = s["jenis_kegiatan"]
+    form_data = await request.form()
+    form = WorkFormData.from_form(form_data)
+    foto_paths = await _save_installation_photos_from_form(form_data, jenis)
+    foto = form_data.get("foto")
+    foto_path = await _primary_work_photo(foto if isinstance(foto, UploadFile) else None, foto_paths)
+    base = _work_base(order, user, form.catatan, foto_path)
+    await _dispatch_work(jenis, order, customer, base, form.as_dict(), foto_paths, user)
+    await db.schedules.update_one({"id": sid}, {"$set": {"status": "done"}})
+    return {"ok": True}

@@ -80,10 +80,7 @@ def _num(n) -> str:
 _SATUAN = ["", "satu", "dua", "tiga", "empat", "lima", "enam", "tujuh", "delapan", "sembilan", "sepuluh", "sebelas"]
 
 
-def terbilang(n) -> str:
-    n = int(n or 0)
-    if n == 0:
-        return "nol"
+def _terbilang_under_1000(n: int) -> str:
     if n < 12:
         return _SATUAN[n]
     if n < 20:
@@ -91,22 +88,33 @@ def terbilang(n) -> str:
     if n < 100:
         return f"{_SATUAN[n // 10]} puluh {terbilang(n % 10)}".strip()
     if n < 200:
-        return f"seratus {terbilang(n - 100)}".strip()
+        return f"seratus {_terbilang_under_1000(n - 100)}".strip()
+    return f"{_SATUAN[n // 100]} ratus {_terbilang_under_1000(n % 100)}".strip()
+
+
+def _terbilang_scaled(n: int) -> str:
+    for divisor, word in ((1_000_000_000, "miliar"), (1_000_000, "juta"), (1000, "ribu")):
+        if n < divisor:
+            continue
+        if divisor == 1000 and n < 2000:
+            return f"seribu {terbilang(n - 1000)}".strip()
+        return f"{terbilang(n // divisor)} {word} {terbilang(n % divisor)}".strip()
+    return _terbilang_under_1000(n)
+
+
+def terbilang(n) -> str:
+    n = int(n or 0)
+    if n == 0:
+        return "nol"
     if n < 1000:
-        return f"{_SATUAN[n // 100]} ratus {terbilang(n % 100)}".strip()
-    if n < 2000:
-        return f"seribu {terbilang(n - 1000)}".strip()
-    if n < 1_000_000:
-        return f"{terbilang(n // 1000)} ribu {terbilang(n % 1000)}".strip()
-    if n < 1_000_000_000:
-        return f"{terbilang(n // 1_000_000)} juta {terbilang(n % 1_000_000)}".strip()
-    return f"{terbilang(n // 1_000_000_000)} miliar {terbilang(n % 1_000_000_000)}".strip()
+        return _terbilang_under_1000(n)
+    return _terbilang_scaled(n)
 
 
 def _parse_dt(value) -> datetime:
     try:
         dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        if dt.tzinfo is None:
+        if dt.tzinfo in (None,):
             return dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(JAKARTA)
         return dt.astimezone(JAKARTA)
     except Exception:
@@ -130,7 +138,7 @@ def _p_text(p_el) -> str:
 def _clear_highlights(p_el) -> None:
     for hl in p_el.xpath(".//w:highlight"):
         parent = hl.getparent()
-        if parent is not None:
+        if parent not in (None,):
             parent.remove(hl)
 
 
@@ -219,29 +227,49 @@ def generate_contract_docx(order: dict, customer: dict, contract: dict) -> bytes
     return buf.getvalue()
 
 
-def _invoice_context(order: dict, customer: dict, invoice: dict) -> dict:
-    branch = detect_pt_branch(customer.get("kota_kab", ""), customer.get("alamat_pemasangan", ""))
-    details = order.get("details", [])
-    dt = _parse_dt(invoice.get("issued_at") or invoice.get("created_at"))
-    extra_meter = invoice.get("extra_pipa_meter") or 0
-    extra_cost = invoice.get("biaya_extra_pipa") or 0
-    note = "Pembayaran dilakukan setelah instalasi selesai dan invoice terbit."
-    if extra_meter:
-        note = f"Extra pipa {extra_meter} m × {_rp(130000)} = {_rp(extra_cost)} (pipa terpakai {invoice.get('total_pipa_meter', '-')} m). " + note
+def _invoice_customer_ctx(customer: dict) -> dict:
     return {
-        "branch": branch,
+        "branch": detect_pt_branch(customer.get("kota_kab", ""), customer.get("alamat_pemasangan", "")),
         "customer_nama": customer.get("nama", "-"),
         "alamat_ktp": customer.get("alamat_ktp", "-"),
+    }
+
+
+def _invoice_details_ctx(details: list) -> dict:
+    return {
         "total_unit": sum(d.get("quantity", 0) for d in details),
         "kapasitas": " / ".join(sorted({d.get("kapasitas", "").replace(" PK", "") for d in details if d.get("kapasitas")})) or "-",
         "variants": " / ".join(sorted({d.get("variant", "Standart") for d in details})) or "Standart",
+    }
+
+
+def _invoice_amount_ctx(invoice: dict) -> dict:
+    dt = _parse_dt(invoice.get("issued_at") or invoice.get("created_at"))
+    return {
         "sewa": next((i.get("amount", 0) for i in invoice.get("items", []) if "Sewa bulan pertama" in i.get("label", "")), 0),
         "total": invoice.get("total", 0),
         "dt": dt,
         "invoice_date": dt.strftime("%d/%m/%Y"),
         "nomor": invoice.get("nomor", "-"),
         "rekening": invoice.get("rekening", "-"),
-        "note": note,
+    }
+
+
+def _invoice_note(invoice: dict) -> str:
+    note = "Pembayaran dilakukan setelah instalasi selesai dan invoice terbit."
+    extra_meter = invoice.get("extra_pipa_meter") or 0
+    if not extra_meter:
+        return note
+    extra_cost = invoice.get("biaya_extra_pipa") or 0
+    return f"Extra pipa {extra_meter} m × {_rp(130000)} = {_rp(extra_cost)} (pipa terpakai {invoice.get('total_pipa_meter', '-')} m). " + note
+
+
+def _invoice_context(order: dict, customer: dict, invoice: dict) -> dict:
+    return {
+        **_invoice_customer_ctx(customer),
+        **_invoice_details_ctx(order.get("details", [])),
+        **_invoice_amount_ctx(invoice),
+        "note": _invoice_note(invoice),
     }
 
 

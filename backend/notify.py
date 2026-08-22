@@ -65,15 +65,19 @@ class _EmailScan(HTMLParser):
             self._href, self._text = None, []
 
 
-def _assert_safe_email(subject: str, html: str) -> None:
-    scan = _EmailScan()
-    scan.feed(html)
+def _assert_no_form_tags(scan: _EmailScan) -> None:
     if scan.tags & {"form", "input", "textarea", "select"}:
         raise ValueError("No forms or input fields in email (G2)")
+
+
+def _assert_no_credential_ask(subject: str, html: str) -> None:
     body = f"{subject}\n{html}".lower()
-    for p in _CRED_ASK:
-        if p in body:
-            raise ValueError(f"Email asks the recipient for credentials: {p!r} (G2)")
+    for phrase in _CRED_ASK:
+        if phrase in body:
+            raise ValueError(f"Email asks the recipient for credentials: {phrase!r} (G2)")
+
+
+def _assert_urls_safe(scan: _EmailScan) -> None:
     for url in scan.urls:
         low = url.strip().lower()
         if low.startswith(("mailto:", "tel:", "cid:", "#")):
@@ -83,6 +87,9 @@ def _assert_safe_email(subject: str, html: str) -> None:
         host = urlparse(low).hostname or ""
         if not _host_ok(host) or urlparse(low).username:
             raise ValueError(f"Shortened, numeric-host or credential-bearing URL: {url!r} (G3)")
+
+
+def _assert_anchor_hosts(scan: _EmailScan) -> None:
     for href, text in scan.anchors:
         real = urlparse(href.strip().lower()).hostname or ""
         if not real:
@@ -90,6 +97,15 @@ def _assert_safe_email(subject: str, html: str) -> None:
         for m in _HOSTISH.finditer(text):
             if not _same_site(m.group(1).lower(), real):
                 raise ValueError(f"Anchor text {m.group(1)!r} ≠ real link host {real!r} (G3)")
+
+
+def _assert_safe_email(subject: str, html: str) -> None:
+    scan = _EmailScan()
+    scan.feed(html)
+    _assert_no_form_tags(scan)
+    _assert_no_credential_ask(subject, html)
+    _assert_urls_safe(scan)
+    _assert_anchor_hosts(scan)
 
 
 async def send_email(*, to: str, subject: str, html: str) -> str | None:
