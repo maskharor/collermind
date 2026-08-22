@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import api, { fmtErr, rupiah, fileUrl } from "@/lib/api";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { usePolling } from "@/lib/usePolling";
 
 const TABS = [
   { key: "deliveries", label: "Pengiriman", cols: ["Kondisi Unit"] },
@@ -51,11 +52,11 @@ function WorkTable({ items, tab }) {
 export default function Operations() {
   const [data, setData] = useState({ deliveries: [], installations: [], maintenances: [], returns: [] });
 
-  useEffect(() => {
-    Promise.all(TABS.map((t) => api.get(`/admin/${t.key}`).then((r) => [t.key, r.data])))
+  const load = () => Promise.all(TABS.map((t) => api.get(`/admin/${t.key}`).then((r) => [t.key, r.data])))
       .then((entries) => setData(Object.fromEntries(entries)))
       .catch((e) => toast.error(fmtErr(e)));
-  }, []);
+  useEffect(() => { load(); }, []); // eslint-disable-line
+  usePolling(load, 20000);
 
   return (
     <div data-testid="admin-operations">

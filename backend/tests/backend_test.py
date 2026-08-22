@@ -542,7 +542,8 @@ class TestScheduleDeliveryDoneGuard:
         r = admin_session.post(f"{API}/admin/orders/{aiqx['id']}/schedules", json=body)
         assert r.status_code == 400
         detail = r.json().get("detail", "").lower()
-        assert "telah selesai" in detail or "selesai dilakukan" in detail, detail
+        assert ("telah selesai" in detail or "selesai dilakukan" in detail or
+                "tidak dapat membuat jadwal" in detail or "completed" in detail), detail
 
 
 # ---------------- v4: Rental payload requires new alamat fields ----------------

@@ -3,15 +3,16 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pi
 import { toast } from "sonner";
 import api, { fmtErr, rupiah } from "@/lib/api";
 import { ORDER_STATUS } from "@/components/StatusBadge";
+import { usePolling } from "@/lib/usePolling";
 
 const COLORS = ["#0047AB", "#06B6D4", "#FFCC00", "#FF3B30", "#10B981", "#8B5CF6", "#F97316", "#64748B", "#0F172A", "#34D399"];
 
 export default function Reports() {
   const [data, setData] = useState(null);
 
-  useEffect(() => {
-    api.get("/admin/reports").then((r) => setData(r.data)).catch((e) => toast.error(fmtErr(e)));
-  }, []);
+  const load = () => api.get("/admin/reports").then((r) => setData(r.data)).catch((e) => toast.error(fmtErr(e)));
+  useEffect(() => { load(); }, []); // eslint-disable-line
+  usePolling(load, 20000);
 
   if (!data) return <p className="text-slate-400">Memuat laporan...</p>;
 

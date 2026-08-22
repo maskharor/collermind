@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Plus, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import api, { fmtErr, rupiah } from "@/lib/api";
+import { usePolling } from "@/lib/usePolling";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,7 +19,8 @@ export default function Tariffs() {
   const [editId, setEditId] = useState(null);
 
   const load = () => api.get("/admin/tariffs").then((r) => setTariffs(r.data)).catch((e) => toast.error(fmtErr(e)));
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, []); // eslint-disable-line
+  usePolling(load, 20000);
 
   async function save() {
     try {

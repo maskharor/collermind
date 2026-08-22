@@ -43,3 +43,18 @@ Digitalisasi proses bisnis penyewaan AC (sebelumnya manual via spreadsheet): pen
 - Ganti placeholder rekening per daerah via menu Pengaturan
 - UAT bersama user
 - Panduan deployment produksi (env production, HTTPS) bila diminta
+
+
+## Update Revisi 2026-08-22 (UI/Backend CollerMind)
+- Form sewa customer: semua section bisa dibuka bebas via stepper; validasi wajib dilakukan saat submit akhir, field kosong diberi tanda merah dan user diarahkan ke section pertama yang belum lengkap.
+- Lokasi penyewaan memakai autocomplete/datalist untuk Provinsi -> Kota/Kabupaten -> Kecamatan -> Kelurahan.
+- Tracking customer: usulan pengiriman minimal H+3 (Asia/Jakarta) dengan date picker shadcn; usulan instalasi hanya pilih jam karena tanggal otomatis H+1 setelah delivered; kontras keterangan upload foto diperbaiki; link unduh invoice DOCX tersedia per invoice.
+- Admin order: NIK customer wajib 16 digit sebelum approve; NIK tersimpan ke customer dan dipakai di kontrak sewa.
+- Email pengajuan berhasil kini memuat kartu "Langkah selanjutnya".
+- Dokumen: template Surat Sewa_v02.docx dan template invoice.docx user dipakai untuk generate DOCX; cabang/NIB/alamat PT mengikuti kota/kabupaten (JAKBAR/JAKSEL/KOTANGSEL/dst), placeholder dibersihkan, hasil dirender dan dicek.
+- Realtime: polling berkala diperluas ke halaman admin/teknisi/kurir/tracking dan polling berhenti saat tab tidak visible.
+- Verifikasi: pytest 87 passed/1 skipped; testing_agent iteration_4 lulus setelah perbaikan toast tracking; frontend build sukses, frontend direstart, self-test tracking tanpa error toast.
+
+## Backlog Minor
+- Konsistensi date picker shadcn untuk filter/form internal admin (Schedules filter, OrderDetail schedule date) menyusul; date picker customer sudah shadcn.
+- Skala admin list: tambahkan pagination/search server-side bila data orders/customers sudah besar.

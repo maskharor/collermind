@@ -145,8 +145,21 @@ def _b_order_created(order, customer, extra):
     kode, nama = order["kode"], customer.get("nama", "Pelanggan")
     body = (f"Halo {nama}, pengajuan rental AC CollerMind Anda telah berhasil dibuat. "
             f"Simpan Order ID ini untuk melacak proses pengajuan dan melanjutkan proses rental.")
-    wa = f"*CollerMind*\n\nHalo {nama}, pengajuan rental AC Anda berhasil dibuat.\nOrder ID: *{kode}*\nSimpan Order ID ini untuk melacak pesanan: {_tracking_url(kode)}"
-    html = _email_html("Pengajuan Rental Diterima", f"<p>{escape(body)}</p>", kode)
+    next_steps = (
+        "<p style=\"margin:16px 0 6px;font-weight:bold\">Langkah selanjutnya:</p>"
+        "<ol style=\"margin:0;padding-left:20px\">"
+        "<li>Admin kami akan memverifikasi data Anda.</li>"
+        "<li>Setelah disetujui, Anda akan menandatangani kontrak digital melalui halaman tracking.</li>"
+        "<li>Anda dapat mengusulkan jadwal pemasangan, lalu admin mengonfirmasi sesuai ketersediaan teknisi.</li>"
+        "<li>Setelah instalasi selesai, invoice diterbitkan dan Anda melakukan pembayaran via transfer.</li>"
+        "</ol>"
+        "<p style=\"margin:12px 0 0;font-style:italic;color:#64748b\">Pembayaran tidak dilakukan sekarang — cukup setelah instalasi selesai dan invoice terbit.</p>"
+    )
+    wa = (f"*CollerMind*\n\nHalo {nama}, pengajuan rental AC Anda berhasil dibuat.\nOrder ID: *{kode}*\n\n"
+          "Langkah selanjutnya:\n1. Admin memverifikasi data Anda.\n2. Setelah disetujui, tanda tangani kontrak digital via halaman tracking.\n"
+          "3. Usulkan jadwal pemasangan, lalu admin konfirmasi.\n4. Setelah instalasi selesai, invoice terbit dan pembayaran dilakukan via transfer.\n\n"
+          f"Lacak pesanan: {_tracking_url(kode)}")
+    html = _email_html("Pengajuan Rental Diterima", f"<p>{escape(body)}</p>{next_steps}", kode)
     return f"Pengajuan Sewa AC Diterima — {kode}", html, wa
 
 

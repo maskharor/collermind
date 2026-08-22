@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { ArrowLeft, MapPin, Phone, UploadCloud, Send, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import api, { fmtErr, rupiah } from "@/lib/api";
+import api, { fmtErr, rupiah, invalidCls } from "@/lib/api";
 import { JENIS_KEGIATAN, StatusBadge } from "@/components/StatusBadge";
+import { usePolling } from "@/lib/usePolling";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,10 +19,12 @@ export default function TechTask() {
   const [fotosList, setFotosList] = useState([]);
   const [foto, setFoto] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [invalid, setInvalid] = useState(new Set());
+  const iv = (k) => invalidCls(invalid.has(k));
 
-  useEffect(() => {
-    api.get(`/tech/schedules/${id}`).then((r) => setData(r.data)).catch((e) => toast.error(fmtErr(e)));
-  }, [id]);
+  const load = () => api.get(`/tech/schedules/${id}`).then((r) => setData(r.data)).catch((e) => toast.error(fmtErr(e)));
+  useEffect(() => { load(); }, [id]); // eslint-disable-line
+  usePolling(load, 15000);
 
   if (!data) return <p className="text-slate-400">Memuat...</p>;
   const { schedule, order, customer, units } = data;
@@ -29,7 +32,11 @@ export default function TechTask() {
   const isDone = schedule.status === "done";
 
   async function submit() {
-    if (jenis === "installation" && (!form.pipa_terpakai || Number(form.pipa_terpakai) <= 0)) return toast.error("Panjang pipa terpakai wajib diisi");
+    if (jenis === "installation" && (!form.pipa_terpakai || Number(form.pipa_terpakai) <= 0)) {
+      setInvalid(new Set(["pipa_terpakai"]));
+      return toast.error("Panjang pipa terpakai wajib diisi");
+    }
+    setInvalid(new Set());
     setBusy(true);
     try {
       const fd = new FormData();
@@ -110,7 +117,7 @@ export default function TechTask() {
                   </div>
                   <div>
                     <Label>Panjang Pipa Terpakai (m) *</Label>
-                    <Input type="number" min="0" step="0.5" data-testid="work-total-pipa" value={form.pipa_terpakai} onChange={(e) => setForm({ ...form, pipa_terpakai: e.target.value })} className="mt-1.5 h-12" placeholder="mis. 3" />
+                    <Input type="number" min="0" step="0.5" data-testid="work-total-pipa" value={form.pipa_terpakai} onChange={(e) => { setForm({ ...form, pipa_terpakai: e.target.value }); if (invalid.has("pipa_terpakai")) setInvalid(new Set()); }} className={`mt-1.5 h-12 ${iv("pipa_terpakai")}`} placeholder="mis. 3" />
                   </div>
                 </div>
                 <p className="text-xs text-slate-400">Extra pipa dihitung dari pipa <b>terpakai</b> (bukan yang dibawa). Paket standar termasuk 3 m; kelebihan Rp130.000/m otomatis masuk invoice. Contoh: bawa 4 m, terpakai 3 m → tanpa biaya extra.</p>

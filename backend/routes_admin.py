@@ -12,6 +12,7 @@ from core import (
 )
 from storage import get_object
 from notify import notify_event
+from contract_service import generate_invoice_docx
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 Admin = Depends(require_role("admin"))
@@ -233,6 +234,7 @@ async def order_detail(order_id: str, user=Admin):
 class VerifyBody(BaseModel):
     hasil: str  # approved | rejected
     catatan: Optional[str] = ""
+    nik: Optional[str] = ""
 
 
 @router.post("/orders/{order_id}/verify")
@@ -242,6 +244,15 @@ async def verify_order(order_id: str, body: VerifyBody, user=Admin):
         raise HTTPException(status_code=400, detail="Order sudah diverifikasi")
     if body.hasil not in ("approved", "rejected"):
         raise HTTPException(status_code=400, detail="Hasil verifikasi tidak valid")
+
+    customer = await db.customers.find_one({"id": order["customer_id"]}, {"_id": 0})
+    if body.hasil == "approved":
+        nik = (body.nik or "").strip()
+        if not (nik.isdigit() and len(nik) == 16):
+            raise HTTPException(status_code=400, detail="NIK customer wajib 16 digit angka sebelum verifikasi disetujui")
+        await db.customers.update_one({"id": order["customer_id"]}, {"$set": {"nik": nik, "updated_at": now_iso()}})
+        if customer:
+            customer["nik"] = nik
 
     await db.verifications.insert_one({
         "id": new_id(), "rental_order_id": order_id, "verified_by": user["id"],
@@ -253,7 +264,6 @@ async def verify_order(order_id: str, body: VerifyBody, user=Admin):
         await set_order_status(order_id, "rejected", user["name"], body.catatan or "")
         return {"ok": True, "status": "rejected"}
 
-    customer = await db.customers.find_one({"id": order["customer_id"]}, {"_id": 0})
     await db.contracts.insert_one({
         "id": new_id(), "order_id": order_id, "kode": order["kode"],
         "content": build_contract_content(order, customer or {}),
@@ -502,6 +512,23 @@ async def reject_payment(pid: str, body: PaymentReviewBody, user=Admin):
     invoice = await db.invoices.find_one({"id": p["invoice_id"]}, {"_id": 0, "nomor": 1})
     await notify_event(p["order_id"], "payment_rejected", {"nomor": invoice["nomor"] if invoice else "", "catatan": body.catatan or ""})
     return {"ok": True}
+
+
+@router.get("/invoices/{invoice_id}/download")
+async def download_invoice_admin(invoice_id: str, user=Admin):
+    invoice = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice tidak ditemukan")
+    order = await db.rental_orders.find_one({"id": invoice["order_id"]}, {"_id": 0})
+    customer = await db.customers.find_one({"id": order["customer_id"]}, {"_id": 0}) if order else None
+    if not order or not customer:
+        raise HTTPException(status_code=404, detail="Data invoice tidak lengkap")
+    data = generate_invoice_docx(order, customer, invoice)
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="Invoice-{invoice["nomor"]}.docx"'},
+    )
 
 
 # ---------- Monthly billing monitoring ----------

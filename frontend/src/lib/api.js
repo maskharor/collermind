@@ -24,6 +24,10 @@ export function rupiah(n) {
   return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n || 0);
 }
 
+export function invalidCls(invalid) {
+  return invalid ? "cm-invalid" : "";
+}
+
 export function fileUrl(path) {
   const token = localStorage.getItem("sac_token");
   return `${API}/admin/files/${path}${token ? `?auth=${token}` : ""}`;

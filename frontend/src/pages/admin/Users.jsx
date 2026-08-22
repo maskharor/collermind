@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Plus, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import api, { fmtErr } from "@/lib/api";
+import { usePolling } from "@/lib/usePolling";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,7 +21,8 @@ export default function Users() {
   const [editId, setEditId] = useState(null);
 
   const load = () => api.get("/admin/users").then((r) => setUsers(r.data)).catch((e) => toast.error(fmtErr(e)));
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, []); // eslint-disable-line
+  usePolling(load, 20000);
 
   async function save() {
     try {

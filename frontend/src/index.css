@@ -80,3 +80,14 @@ body {
         border-bottom-color: inherit;
     }
 }
+
+
+[data-invalid="true"],
+.cm-invalid {
+    border-color: rgb(239 68 68) !important;
+    box-shadow: 0 0 0 1px rgb(239 68 68) !important;
+}
+
+.cm-invalid-label {
+    color: rgb(220 38 38) !important;
+}

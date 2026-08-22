@@ -1,0 +1,61 @@
+{
+  "summary": "Tested all latest revision features (backend + frontend) after the refactor. Backend: 87/87 pytest pass (62 existing regression + 25 new tests I added for contract/invoice DOCX, NIK gate, schedule H+3/H+1 rules, full verified->delivered->installation E2E, and auth playbook checks). Frontend: /sewa free step navigation + datalist autocomplete + final red validation verified; /tracking polling, invoice DOCX download links, installation jam-only auto date verified; 12 admin pages load clean with polling wired; admin NIK gate button state verified. One real UX defect found on /tracking (recurring error toast every poll for orders with past installation_date) and one environment issue (stale CRA dev bundle until frontend restart).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/admin/orders", "issue": "No pagination/search params (returns up to 1000 docs) and does an N+1 customer lookup per order; every admin page now polls these full lists every 15-20s -> scaling risk"},
+      {"endpoint": "POST /api/admin/orders/{id}/verify", "issue": "When body.nik is empty the gate silently falls back to the stored customer.nik, so a returning customer can be approved without the admin entering/confirming NIK. Confirm this is intended (frontend still requires 16 digits in the input, so it only affects direct API use)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Tracking.jsx (loadSlots)", "issue": "Error toast 'Tanggal tidak boleh di masa lalu' appears on unlock AND again on every 20s poll for orders whose installation_date is already in the past (reproduced with CLM-20260817-8U8U / 082112223333, installation_date 2026-08-21). Root cause: unlock() and refresh() call loadSlots(data.installation_date) unconditionally; GET /api/public/slots returns 400 for past dates and loadSlots toasts the error. Fix: only fetch slots when order status === 'delivered' AND installation_date >= today, and never toast during silent polling refresh.", "selector": "[data-testid=\"full-access\"]", "priority": "HIGH"},
+      {"component": "Tracking.jsx contract section", "issue": "Shows 'Kontrak PDF bertanda tangan telah diterima dan dapat dilihat admin...' even when the contract was signed through the legacy e-sign endpoint with no PDF uploaded (verified on CLM-20260822-0JB3). Misleading copy.", "selector": "[data-testid=\"contract-pdf-note\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "Frontend dev bundle freshness", "issue": "Before I restarted the frontend, the served CRA bundle was one edit behind (invoice 'Unduh Invoice' anchor + data-testid=invoice-download-* were missing from the DOM while present in source and in /static/js/bundle.js). After `supervisorctl restart frontend` all 6 invoice download links rendered and returned 200 DOCX. Main agent should verify compile/restart after edits before self-testing.", "affected_selectors": ["[data-testid^=\"invoice-download-\"]"]}
+    ],
+    "design_issues": [
+      {"screen": "Tracking (delivery date), Admin OrderDetail (schedule date), Admin Schedules (date filter)", "issues": ["Native browser <input type=date> used (renders US mm/dd/yyyy) while /sewa uses the shadcn Calendar/Popover — inconsistent and confusing for Indonesian users", "Customer-facing delivery date picker relies on the browser min attribute only; server H+3 rule is the real guard (works, returns 400)"]},
+      {"screen": "Public pages", "issues": ["Harmless 401 console error on public pages from the /auth/me bootstrap call (noise only)"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/test_revisions.py",
+    "/app/backend/tests/test_nik_approval.py",
+    "/app/backend/tests/test_installation_flow.py",
+    "/app/backend/tests/test_auth_playbook.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix Tracking.jsx loadSlots: gate on status==='delivered' && installation_date >= today, and suppress error toasts during polling refresh (currently a red error toast every 20s for active orders)",
+    "Replace native date inputs with the shadcn Calendar in Tracking delivery date + admin schedule date/filter for consistency and dd/mm/yyyy formatting",
+    "Adjust the contract-pdf-note copy so it only appears when a signed PDF actually exists (contract.pdf_path)",
+    "Consider pagination/filters for GET /api/admin/orders and a visibility check inside usePolling (pause when document.hidden) to cut redundant polling traffic",
+    "Optional cleanup of my seed data: orders CLM-20260822-0JB3 / -Q86H / -UTR4 (customer 'TEST NIK Gate'), customers test_nikgate_*@example.com, and TEST-UNIT-* AC units"
+  ],
+  "critical_code_review_comments": [
+    "routes_public.full_access_payload always returns installation_date derived from delivered_at even for installed/active/completed orders; the frontend then queries /public/slots with a past date. Either return null once installation is done or let the frontend gate the call.",
+    "routes_admin.py is 718 lines and mixes units/tariffs/orders/invoices/settings/users; consider splitting per resource before it grows further.",
+    "contract_service.generate_invoice_docx wraps its whole table-mutation block in `except Exception: pass`, so a template change would silently produce a partly-empty invoice. Log the exception at minimum.",
+    "usePolling has no document.visibilityState guard and no jitter; with 18 pages at 15-20s intervals this multiplies load once several tabs are open."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_revisions.py",
+    "/app/backend/tests/test_nik_approval.py",
+    "/app/backend/tests/test_installation_flow.py",
+    "/app/backend/tests/test_auth_playbook.py",
+    "/app/scripts/inspect_data.py",
+    "/app/scripts/inspect_contract.py",
+    "/app/scripts/inspect_orders.py",
+    "/app/scripts/inspect_notifs.py"
+  ],
+  "success_rate": {"backend": "100% (87/87 pytest)", "frontend": "~92% (all flows work; 1 recurring error-toast defect + minor copy/design issues)"},
+  "seed_data_creation": "Created via public API + admin flow: orders CLM-20260822-0JB3 (driven to delivered with pending installation request 2026-08-23 13:00), CLM-20260822-Q86H, CLM-20260822-UTR4 for customer 'TEST NIK Gate' (emails test_nikgate_<hhmmss>@example.com, NIK 3276019988776655); TEST-UNIT-0.5PK-* AC units created for allocation (now reserved/rented). The pre-existing pending order CLM-20260815-XZ5J was left untouched for UI testing.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "Admin maskharor.prakerin@gmail.com/admin123, teknisi@sewaac.id/teknisi123, kurir@sewaac.id/kurir123 (all valid). Public: CLM-20260817-8U8U/082112223333 (active), CLM-20260822-0JB3 + contact from admin detail (delivered, good for installation UI).",
+  "context_for_next_testing_agent": "Verified this iteration: contract DOCX (KOTANGSEL + NIB 1701260006922, NIK '-' fallback, zero placeholders), invoice DOCX public+admin (cookie auth works for the plain <a> download in browser), NIK gate (API 400 without/short/non-digit NIK; UI approve button disabled until 16 digits; NIK persisted to customer.nik and rendered in contract), schedule rules (delivery H+0/H+2 rejected with H+3 message, H+3 accepted, past date 422, installation requires delivered + valid jam, installation_date forced to delivered_at+1 even when the client sends another date), /sewa free step nav + datalist wilayah chain + red cm-invalid markers on empty submit, tracking polling every 20s, admin 12 pages + polling. Rate limit: /api/public/rentals is 5/hour per IP — test_nik_approval and test_installation_flow will skip once exhausted. Run order matters: test_nik_approval creates the order that test_installation_flow drives to delivered. Outstanding bug: Tracking loadSlots error toast for past installation_date.",
+  "rca_of_the_issue": "Tracking error toast: full_access_payload computes installation_date = delivered_at + 1 day for every order that has a delivery record, including installed/active ones. Tracking.jsx unlock()/refresh() call loadSlots(installation_date) whenever that field is truthy; GET /api/public/slots rejects dates before today with HTTP 400 ('Tanggal tidak boleh di masa lalu'), and loadSlots surfaces the failure via toast.error, so the customer sees a red error on unlock and again on each 20s poll. Reproduce: /tracking -> CLM-20260817-8U8U -> kontak 082112223333 -> unlock. Mitigation: gate slot loading on order status 'delivered' plus a future installation_date, and keep polling refresh silent."
+}

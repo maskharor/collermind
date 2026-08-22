@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form, Response
@@ -13,9 +14,10 @@ from core import (
 )
 from storage import save_image, save_pdf
 from notify import notify_event
-from contract_service import generate_contract_docx
+from contract_service import generate_contract_docx, generate_invoice_docx
 
 router = APIRouter(tags=["public"])
+JAKARTA = ZoneInfo("Asia/Jakarta")
 
 
 @router.get("/api/public/tariffs")
@@ -127,9 +129,9 @@ class RentalPayload(BaseModel):
 @router.post("/api/public/rentals")
 async def submit_rental(request: Request, payload: str = Form(...), ktp: UploadFile = File(...)):
     ip = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() or (request.client.host if request.client else "unknown")
-    await _check_rate_limit(ip)
     data = _parse_rental_payload(payload)
     details = await _build_order_details(data.items)
+    await _check_rate_limit(ip)
     alamat_pemasangan = f"{data.detail_alamat}, Kel. {data.kelurahan}, Kec. {data.kecamatan}, {data.kota_kab}, {data.provinsi}"
 
     sewa = sum(d["subtotal"] for d in details)
@@ -286,7 +288,25 @@ class AccessBody(BaseModel):
     kontak: str
 
 
+async def _delivery_info(order: dict):
+    delivery = await db.deliveries.find_one({"rental_order_id": order["id"]}, {"_id": 0, "tanggal": 1}, sort=[("tanggal", -1)])
+    delivered_at = (delivery or {}).get("tanggal")
+    if not delivered_at:
+        delivered_at = next((h.get("at") for h in reversed(order.get("status_history", [])) if h.get("status") == "delivered"), None)
+    if not delivered_at:
+        return None, None
+    try:
+        dt = datetime.fromisoformat(str(delivered_at).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        local = dt.astimezone(JAKARTA)
+        return local.isoformat(), (local + timedelta(days=1)).date().isoformat()
+    except Exception:
+        return None, None
+
+
 async def full_access_payload(order, customer):
+    delivered_at, installation_date = await _delivery_info(order)
     contract = await db.contracts.find_one({"order_id": order["id"]}, {"_id": 0})
     invoices = await db.invoices.find({"order_id": order["id"]}, {"_id": 0}).sort([("jenis", 1), ("periode", 1)]).to_list(50)
     first_invoice = next((i for i in invoices if i.get("jenis") == "first"), invoices[0] if invoices else None)
@@ -315,6 +335,8 @@ async def full_access_payload(order, customer):
         "payments": payments,
         "schedules": schedules,
         "schedule_request": req,
+        "delivered_at": delivered_at,
+        "installation_date": installation_date,
     }
 
 
@@ -322,6 +344,24 @@ async def full_access_payload(order, customer):
 async def access_detail(body: AccessBody):
     order, customer = await verify_public_access(body.kode, body.kontak)
     return await full_access_payload(order, customer)
+
+
+@router.get("/api/public/invoice/download")
+async def download_invoice_public(kode: str, kontak: str, invoice_id: str = ""):
+    order, customer = await verify_public_access(kode, kontak)
+    if invoice_id:
+        invoice = await db.invoices.find_one({"id": invoice_id, "order_id": order["id"]}, {"_id": 0})
+    else:
+        invoice = await db.invoices.find_one({"order_id": order["id"], "jenis": "first"}, {"_id": 0}) or \
+            await db.invoices.find_one({"order_id": order["id"]}, {"_id": 0})
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice belum diterbitkan")
+    data = generate_invoice_docx(order, customer, invoice)
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="Invoice-{invoice["nomor"]}.docx"'},
+    )
 
 
 # ---------- Kontrak digital: unduh template terisi + upload PDF bertanda tangan ----------
@@ -444,7 +484,7 @@ async def available_slots(tanggal: str):
 class ScheduleRequestBody(BaseModel):
     kode: str
     kontak: str
-    tanggal: str
+    tanggal: Optional[str] = ""
     jam: Optional[str] = ""
     jenis: str = "delivery"
     catatan: Optional[str] = ""
@@ -452,11 +492,13 @@ class ScheduleRequestBody(BaseModel):
     @field_validator("tanggal")
     @classmethod
     def valid_date(cls, v):
+        if not v:
+            return v
         try:
             d = datetime.strptime(v, "%Y-%m-%d").date()
         except ValueError:
             raise ValueError("Format tanggal tidak valid")
-        if d < datetime.now(timezone.utc).date():
+        if d < datetime.now(JAKARTA).date():
             raise ValueError("Tanggal tidak boleh di masa lalu")
         return v
 
@@ -467,6 +509,12 @@ async def schedule_request(body: ScheduleRequestBody):
     if order.get("contract_status") != "signed":
         raise HTTPException(status_code=400, detail="Tandatangani kontrak terlebih dahulu")
     if body.jenis == "delivery":
+        if not body.tanggal:
+            raise HTTPException(status_code=400, detail="Pilih tanggal usulan pengiriman")
+        d = datetime.strptime(body.tanggal, "%Y-%m-%d").date()
+        min_delivery = datetime.now(JAKARTA).date() + timedelta(days=3)
+        if d < min_delivery:
+            raise HTTPException(status_code=400, detail=f"Tanggal pengiriman minimal H+3 ({min_delivery.isoformat()} atau setelahnya)")
         if not order.get("lokasi_detail"):
             raise HTTPException(status_code=400, detail="Isi form detail lokasi terlebih dahulu")
         if order["status"] != "verified":
@@ -476,7 +524,11 @@ async def schedule_request(body: ScheduleRequestBody):
             raise HTTPException(status_code=400, detail="Jadwal instalasi dapat dipilih setelah unit diterima")
         if body.jam not in SLOT_TIMES:
             raise HTTPException(status_code=400, detail="Pilih slot jam yang tersedia")
-        slots = await available_slots(body.tanggal)
+        _, installation_date = await _delivery_info(order)
+        if not installation_date:
+            raise HTTPException(status_code=400, detail="Menunggu konfirmasi unit AC berhasil terkirim")
+        body.tanggal = installation_date
+        slots = await available_slots(installation_date)
         slot = next((s for s in slots["slots"] if s["jam"] == body.jam), None)
         if not slot or not slot["tersedia"]:
             raise HTTPException(status_code=400, detail="Slot tersebut sudah penuh, pilih slot lain")

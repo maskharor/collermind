@@ -2,18 +2,26 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
-import { Search, Loader2, Lock, FileText, CalendarClock, Receipt, UploadCloud, MapPin, Truck, Download, MessageCircle, Repeat } from "lucide-react";
+import { Search, Loader2, Lock, FileText, CalendarClock, CalendarIcon, Receipt, UploadCloud, MapPin, Truck, Download, MessageCircle, Repeat } from "lucide-react";
 import { toast } from "sonner";
 import PublicLayout from "@/layouts/PublicLayout";
-import api, { API, fmtErr, rupiah } from "@/lib/api";
+import api, { API, fmtErr, rupiah, invalidCls } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { StatusBadge, INVOICE_STATUS, PAYMENT_STATUS, JENIS_KEGIATAN } from "@/components/StatusBadge";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
 
 const PAYABLE = ["issued", "payment_rejected", "overdue"];
+
+function jakartaDatePlus(days = 0) {
+  const base = new Date(new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }));
+  base.setDate(base.getDate() + days);
+  return base.toISOString().slice(0, 10);
+}
 
 export default function Tracking() {
   const [params] = useSearchParams();
@@ -23,19 +31,28 @@ export default function Tracking() {
   const [full, setFull] = useState(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [invalid, setInvalid] = useState(new Set());
 
   const [kontrakFile, setKontrakFile] = useState(null);
   const [lokasi, setLokasi] = useState({ ket_indoor: "", ket_outdoor: "", perkiraan_pipa: "" });
   const [fotoIndoor, setFotoIndoor] = useState(null);
   const [fotoOutdoor, setFotoOutdoor] = useState(null);
   const [schedReq, setSchedReq] = useState({ tanggal: "", catatan: "" });
-  const [slotTanggal, setSlotTanggal] = useState("");
-  const [slots, setSlots] = useState([]);
   const [slotJam, setSlotJam] = useState("");
+  const [slots, setSlots] = useState([]);
   const [slotCatatan, setSlotCatatan] = useState("");
   const [bukti, setBukti] = useState(null);
   const [payNote, setPayNote] = useState("");
   const [payInvoice, setPayInvoice] = useState(null);
+  const minDeliveryDate = jakartaDatePlus(3);
+  const iv = (k) => invalidCls(invalid.has(k));
+  const markInvalid = (keys) => setInvalid(new Set(keys));
+  const clearInvalid = (...keys) => {
+    if (!keys.some((k) => invalid.has(k))) return;
+    const next = new Set(invalid);
+    keys.forEach((k) => next.delete(k));
+    setInvalid(next);
+  };
 
   async function search(k) {
     const key = (k ?? kode).trim();
@@ -66,6 +83,7 @@ export default function Tracking() {
     try {
       const { data } = await api.post("/public/access", { kode: summary.kode, kontak: kontak.trim() });
       setFull(data);
+      if (data.status === "delivered" && data.installation_date && data.installation_date >= jakartaDatePlus(0)) loadSlots(data.installation_date, true);
       toast.success("Akses terverifikasi");
     } catch (e) {
       toast.error(fmtErr(e));
@@ -78,6 +96,7 @@ export default function Tracking() {
     try {
       const { data } = await api.post("/public/access", { kode: summary.kode, kontak: kontak.trim() });
       setFull(data);
+      if (data.status === "delivered" && data.installation_date && data.installation_date >= jakartaDatePlus(0)) loadSlots(data.installation_date, true);
       const s = await api.get(`/public/track/${summary.kode}`);
       setSummary(s.data);
     } catch { /* ignore */ }
@@ -105,8 +124,15 @@ export default function Tracking() {
   }
 
   async function submitLokasi() {
-    if (!fotoIndoor || !fotoOutdoor) return toast.error("Kedua foto (indoor & outdoor) wajib diunggah");
-    if (lokasi.ket_indoor.trim().length < 3 || lokasi.ket_outdoor.trim().length < 3) return toast.error("Keterangan foto wajib diisi");
+    const errs = new Set();
+    if (!fotoIndoor) errs.add("foto_indoor");
+    if (!fotoOutdoor) errs.add("foto_outdoor");
+    if (lokasi.ket_indoor.trim().length < 3) errs.add("ket_indoor");
+    if (lokasi.ket_outdoor.trim().length < 3) errs.add("ket_outdoor");
+    if (errs.size) {
+      markInvalid([...errs]);
+      return toast.error("Foto dan keterangan wajib diisi. Kolom kurang lengkap ditandai merah.");
+    }
     setBusy(true);
     try {
       const fd = new FormData();
@@ -119,16 +145,25 @@ export default function Tracking() {
       fd.append("foto_outdoor", fotoOutdoor);
       await api.post("/public/location-detail", fd);
       toast.success("Detail lokasi tersimpan");
+      markInvalid([]);
       refresh();
     } catch (e) { toast.error(fmtErr(e)); } finally { setBusy(false); }
   }
 
   async function proposeDelivery() {
-    if (!schedReq.tanggal) return toast.error("Pilih tanggal usulan pengiriman");
+    if (!schedReq.tanggal) {
+      markInvalid(["sched_tanggal"]);
+      return toast.error("Pilih tanggal usulan pengiriman");
+    }
+    if (schedReq.tanggal < minDeliveryDate) {
+      markInvalid(["sched_tanggal"]);
+      return toast.error(`Tanggal pengiriman minimal H+3 (${minDeliveryDate} atau setelahnya)`);
+    }
     setBusy(true);
     try {
       await api.post("/public/schedule-request", { kode: summary.kode, kontak: kontak.trim(), jenis: "delivery", ...schedReq });
       toast.success("Usulan jadwal pengiriman terkirim. Admin akan mengonfirmasi.");
+      markInvalid([]);
       refresh();
     } catch (e) { toast.error(fmtErr(e)); } finally { setBusy(false); }
   }
@@ -142,23 +177,30 @@ export default function Tracking() {
     } catch (e) { toast.error(fmtErr(e)); } finally { setBusy(false); }
   }
 
-  async function loadSlots(tgl) {
-    setSlotTanggal(tgl);
+  async function loadSlots(tgl, silent = false) {
     setSlotJam("");
     setSlots([]);
     if (!tgl) return;
     try {
       const { data } = await api.get("/public/slots", { params: { tanggal: tgl } });
       setSlots(data.slots);
-    } catch (e) { toast.error(fmtErr(e)); }
+    } catch (e) {
+      if (!silent) toast.error(fmtErr(e));
+    }
   }
 
   async function proposeInstallation() {
-    if (!slotTanggal || !slotJam) return toast.error("Pilih tanggal dan slot jam");
+    const tanggal = full?.installation_date;
+    if (!tanggal) return toast.error("Menunggu konfirmasi unit AC berhasil terkirim. Tanggal instalasi otomatis H+1 setelah pengiriman.");
+    if (!slotJam) {
+      markInvalid(["slot_jam"]);
+      return toast.error("Pilih slot jam instalasi");
+    }
     setBusy(true);
     try {
-      await api.post("/public/schedule-request", { kode: summary.kode, kontak: kontak.trim(), jenis: "installation", tanggal: slotTanggal, jam: slotJam, catatan: slotCatatan });
+      await api.post("/public/schedule-request", { kode: summary.kode, kontak: kontak.trim(), jenis: "installation", tanggal, jam: slotJam, catatan: slotCatatan });
       toast.success("Usulan jadwal instalasi terkirim. Admin akan memverifikasi.");
+      markInvalid([]);
       refresh();
     } catch (e) { toast.error(fmtErr(e)); } finally { setBusy(false); }
   }
@@ -293,7 +335,11 @@ export default function Tracking() {
                     {full.contract.status === "signed" ? (
                       <div className="mt-3 space-y-2">
                         <p className="text-xs text-slate-500">Ditandatangani oleh <b>{full.contract.signer_name}</b> pada {fmtDT(full.contract.signed_at)}</p>
-                        <p className="text-xs text-emerald-600 font-semibold" data-testid="contract-pdf-note">Kontrak PDF bertanda tangan telah diterima dan dapat dilihat admin pada halaman rental order.</p>
+                        {full.contract?.pdf_path ? (
+                          <p className="text-xs text-emerald-600 font-semibold" data-testid="contract-pdf-note">Kontrak PDF bertanda tangan telah diterima dan dapat dilihat admin pada halaman rental order.</p>
+                        ) : (
+                          <p className="text-xs text-emerald-600 font-semibold" data-testid="contract-signed-note">Kontrak digital telah ditandatangani dan diterima admin.</p>
+                        )}
                       </div>
                     ) : (
                       <div className="mt-4 space-y-3">
@@ -320,27 +366,27 @@ export default function Tracking() {
                     <p className="font-heading font-bold text-slate-900 flex items-center gap-2 mb-2"><MapPin className="w-5 h-5 text-[#0047AB]" /> Form Lanjutan — Detail Lokasi Pemasangan</p>
                     <div className="space-y-4 mt-4">
                       <div>
-                        <Label className="text-xs font-bold uppercase tracking-[0.15em] text-slate-500">Foto rencana AC indoor + sumber listrik terdekat *</Label>
-                        <label data-testid="foto-indoor-area" className="mt-2 flex items-center justify-center gap-3 border-2 border-dashed border-slate-300 rounded-2xl p-5 cursor-pointer hover:border-[#0047AB] hover:bg-slate-50 transition-colors">
-                          <UploadCloud className="w-6 h-6 text-slate-400" />
-                          <span className="text-sm text-slate-600 font-medium">{fotoIndoor ? fotoIndoor.name : "Ambil / pilih foto indoor"}</span>
-                          <input data-testid="input-foto-indoor" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" className="hidden" onChange={(e) => setFotoIndoor(e.target.files[0] || null)} />
+                        <Label className="text-xs font-bold uppercase tracking-[0.15em] text-slate-700">Foto rencana AC indoor + sumber listrik terdekat *</Label>
+                        <label data-testid="foto-indoor-area" className={`mt-2 flex items-center justify-center gap-3 border-2 border-dashed border-slate-300 rounded-2xl p-5 cursor-pointer hover:border-[#0047AB] hover:bg-slate-50 transition-colors ${iv("foto_indoor")}`}>
+                          <UploadCloud className="w-6 h-6 text-slate-500" />
+                          <span className="text-sm text-slate-700 font-semibold">{fotoIndoor ? fotoIndoor.name : "Ambil / pilih foto indoor"}</span>
+                          <input data-testid="input-foto-indoor" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" className="hidden" onChange={(e) => { setFotoIndoor(e.target.files[0] || null); clearInvalid("foto_indoor"); }} />
                         </label>
-                        <Input data-testid="ket-indoor" value={lokasi.ket_indoor} onChange={(e) => setLokasi({ ...lokasi, ket_indoor: e.target.value })} className="mt-2" placeholder="Keterangan: posisi indoor & jarak stop kontak terdekat *" />
+                        <Input data-testid="ket-indoor" value={lokasi.ket_indoor} onChange={(e) => { setLokasi({ ...lokasi, ket_indoor: e.target.value }); clearInvalid("ket_indoor"); }} className={`mt-2 placeholder:text-slate-500 ${iv("ket_indoor")}`} placeholder="Keterangan wajib: posisi indoor & jarak stop kontak terdekat *" />
                       </div>
                       <div>
-                        <Label className="text-xs font-bold uppercase tracking-[0.15em] text-slate-500">Foto rencana AC outdoor dipasang di mana *</Label>
-                        <label data-testid="foto-outdoor-area" className="mt-2 flex items-center justify-center gap-3 border-2 border-dashed border-slate-300 rounded-2xl p-5 cursor-pointer hover:border-[#0047AB] hover:bg-slate-50 transition-colors">
-                          <UploadCloud className="w-6 h-6 text-slate-400" />
-                          <span className="text-sm text-slate-600 font-medium">{fotoOutdoor ? fotoOutdoor.name : "Ambil / pilih foto lokasi outdoor"}</span>
-                          <input data-testid="input-foto-outdoor" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" className="hidden" onChange={(e) => setFotoOutdoor(e.target.files[0] || null)} />
+                        <Label className="text-xs font-bold uppercase tracking-[0.15em] text-slate-700">Foto rencana AC outdoor dipasang di mana *</Label>
+                        <label data-testid="foto-outdoor-area" className={`mt-2 flex items-center justify-center gap-3 border-2 border-dashed border-slate-300 rounded-2xl p-5 cursor-pointer hover:border-[#0047AB] hover:bg-slate-50 transition-colors ${iv("foto_outdoor")}`}>
+                          <UploadCloud className="w-6 h-6 text-slate-500" />
+                          <span className="text-sm text-slate-700 font-semibold">{fotoOutdoor ? fotoOutdoor.name : "Ambil / pilih foto lokasi outdoor"}</span>
+                          <input data-testid="input-foto-outdoor" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" className="hidden" onChange={(e) => { setFotoOutdoor(e.target.files[0] || null); clearInvalid("foto_outdoor"); }} />
                         </label>
-                        <Input data-testid="ket-outdoor" value={lokasi.ket_outdoor} onChange={(e) => setLokasi({ ...lokasi, ket_outdoor: e.target.value })} className="mt-2" placeholder="Keterangan: outdoor dipasang di mana *" />
+                        <Input data-testid="ket-outdoor" value={lokasi.ket_outdoor} onChange={(e) => { setLokasi({ ...lokasi, ket_outdoor: e.target.value }); clearInvalid("ket_outdoor"); }} className={`mt-2 placeholder:text-slate-500 ${iv("ket_outdoor")}`} placeholder="Keterangan wajib: outdoor dipasang di mana *" />
                       </div>
                       <div>
                         <Label>Perkiraan pipa yang dibutuhkan (meter)</Label>
                         <Input type="number" min="0" step="0.5" data-testid="input-perkiraan-pipa" value={lokasi.perkiraan_pipa} onChange={(e) => setLokasi({ ...lokasi, perkiraan_pipa: e.target.value })} className="mt-1.5" placeholder="mis. 4" />
-                        <p className="text-xs text-slate-400 mt-1">Hanya perkiraan — biaya extra pipa final dihitung dari pipa terpakai saat instalasi.</p>
+                        <p className="text-xs text-slate-500 mt-1">Hanya perkiraan — biaya extra pipa final dihitung dari pipa terpakai saat instalasi.</p>
                       </div>
                     </div>
                     <Button data-testid="btn-submit-lokasi" onClick={submitLokasi} disabled={busy} className="mt-4 rounded-full bg-[#0047AB] hover:bg-[#003a8c]">
@@ -359,8 +405,23 @@ export default function Tracking() {
                     ) : (
                       <div className="space-y-3">
                         <p className="text-sm text-slate-500">Detail lokasi tersimpan. Usulkan tanggal pengiriman unit.</p>
-                        <p className="text-sm bg-blue-50 border border-blue-200 text-blue-800 rounded-xl p-3">Estimasi pengiriman ±3 hari setelah jadwal dikonfirmasi admin.</p>
-                        <div><Label>Tanggal Usulan Pengiriman</Label><Input type="date" data-testid="req-tanggal" value={schedReq.tanggal} onChange={(e) => setSchedReq({ ...schedReq, tanggal: e.target.value })} className="mt-1.5 h-12" /></div>
+                        <p className="text-sm bg-blue-50 border border-blue-200 text-blue-800 rounded-xl p-3">Tanggal pengiriman minimal H+3 dari hari ini (paling cepat {minDeliveryDate}). Estimasi pengiriman ±3 hari setelah jadwal dikonfirmasi admin.</p>
+                        <div>
+                          <Label>Tanggal Usulan Pengiriman</Label>
+                          <Popover>
+                            <PopoverTrigger asChild>
+                              <Button type="button" variant="outline" data-testid="req-tanggal" className={`w-full justify-start mt-1.5 h-12 font-normal ${iv("sched_tanggal")}`}>
+                                <CalendarIcon className="mr-2 h-4 w-4 text-[#0047AB]" />
+                                {schedReq.tanggal ? format(new Date(`${schedReq.tanggal}T00:00:00`), "dd MMMM yyyy", { locale: idLocale }) : `Pilih tanggal (minimal ${minDeliveryDate})`}
+                              </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-auto p-0" align="start">
+                              <Calendar mode="single" selected={schedReq.tanggal ? new Date(`${schedReq.tanggal}T00:00:00`) : undefined}
+                                onSelect={(d) => { setSchedReq({ ...schedReq, tanggal: d ? format(d, "yyyy-MM-dd") : "" }); clearInvalid("sched_tanggal"); }}
+                                disabled={(d) => d < new Date(`${minDeliveryDate}T00:00:00`)} />
+                            </PopoverContent>
+                          </Popover>
+                        </div>
                         <Textarea data-testid="req-catatan" value={schedReq.catatan} onChange={(e) => setSchedReq({ ...schedReq, catatan: e.target.value })} placeholder="Catatan (opsional)" rows={2} />
                         <Button data-testid="btn-propose-delivery" onClick={proposeDelivery} disabled={busy} className="rounded-full bg-[#0047AB] hover:bg-[#003a8c]">Kirim Usulan Pengiriman</Button>
                       </div>
@@ -377,13 +438,15 @@ export default function Tracking() {
                       </p>
                     ) : (
                       <div className="space-y-3">
-                        <p className="text-sm text-slate-500">Unit sudah diterima. Pilih tanggal untuk melihat slot teknisi yang tersedia.</p>
-                        <div><Label>Tanggal Instalasi</Label><Input type="date" data-testid="slot-tanggal" value={slotTanggal} onChange={(e) => loadSlots(e.target.value)} className="mt-1.5 h-12" /></div>
+                        <p className="text-sm text-slate-500">Unit sudah diterima. Tanggal instalasi dibuat otomatis <b>H+1 setelah AC terkirim</b>; Anda hanya memilih jam.</p>
+                        <p className="text-sm bg-blue-50 border border-blue-200 text-blue-800 rounded-xl p-3" data-testid="installation-auto-date">
+                          Tanggal instalasi otomatis: <b>{full.installation_date || "menunggu konfirmasi pengiriman"}</b>
+                        </p>
                         {slots.length > 0 && (
-                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2" data-testid="slot-list">
+                          <div className={`grid grid-cols-2 sm:grid-cols-4 gap-2 rounded-xl ${invalid.has("slot_jam") ? "ring-1 ring-red-500 p-2" : ""}`} data-testid="slot-list">
                             {slots.map((s) => (
                               <button key={s.jam} type="button" disabled={!s.tersedia} data-testid={`slot-${s.jam}`}
-                                onClick={() => setSlotJam(s.jam)}
+                                onClick={() => { setSlotJam(s.jam); clearInvalid("slot_jam"); }}
                                 className={`h-12 rounded-xl border font-semibold text-sm transition-colors ${slotJam === s.jam ? "bg-[#0047AB] text-white border-[#0047AB]" : s.tersedia ? "bg-white border-slate-200 hover:border-[#0047AB]" : "bg-slate-100 text-slate-300 border-slate-100 cursor-not-allowed"}`}>
                                 {s.jam}{!s.tersedia && <span className="block text-[10px] font-normal">Penuh</span>}
                               </button>
@@ -391,7 +454,7 @@ export default function Tracking() {
                           </div>
                         )}
                         <Textarea data-testid="slot-catatan" value={slotCatatan} onChange={(e) => setSlotCatatan(e.target.value)} placeholder="Catatan (opsional)" rows={2} />
-                        <Button data-testid="btn-propose-installation" onClick={proposeInstallation} disabled={busy || !slotJam} className="rounded-full bg-[#0047AB] hover:bg-[#003a8c]">Kirim Usulan Instalasi</Button>
+                        <Button data-testid="btn-propose-installation" onClick={proposeInstallation} disabled={busy || !slotJam || !full.installation_date} className="rounded-full bg-[#0047AB] hover:bg-[#003a8c]">Kirim Usulan Instalasi</Button>
                       </div>
                     )}
                   </div>
@@ -429,7 +492,13 @@ export default function Tracking() {
                           <div className="flex justify-between font-bold pt-2 border-t border-slate-100 text-base">
                             <span>Total Tagihan</span><span className="text-[#0047AB]">{rupiah(inv.total)}</span>
                           </div>
-                          <p className="text-xs text-slate-400">Jatuh tempo: {inv.due_date}</p>
+                          <div className="flex items-center justify-between gap-3 pt-1">
+                            <p className="text-xs text-slate-400">Jatuh tempo: {inv.due_date}</p>
+                            <a data-testid={`invoice-download-${inv.nomor}`} href={`${API}/public/invoice/download?kode=${encodeURIComponent(summary.kode)}&kontak=${encodeURIComponent(kontak.trim())}&invoice_id=${encodeURIComponent(inv.id)}`}
+                              className="inline-flex items-center gap-1 text-xs font-semibold text-[#0047AB] hover:underline">
+                              <Download className="w-3.5 h-3.5" /> Unduh Invoice
+                            </a>
+                          </div>
                         </div>
                         {inv.status !== "scheduled" && (
                           <div className="mt-4 bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm" data-testid={`rekening-${inv.nomor}`}>

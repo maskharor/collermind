@@ -4,7 +4,7 @@ import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
 import { ArrowLeft, CheckCircle2, XCircle, CalendarPlus, FlagTriangleRight, FileText, Receipt, Landmark } from "lucide-react";
 import { toast } from "sonner";
-import api, { fmtErr, rupiah, fileUrl } from "@/lib/api";
+import api, { API, fmtErr, rupiah, fileUrl, invalidCls } from "@/lib/api";
 import { StatusBadge, JENIS_KEGIATAN, INVOICE_STATUS, PAYMENT_STATUS } from "@/components/StatusBadge";
 import { usePolling } from "@/lib/usePolling";
 import { Button } from "@/components/ui/button";
@@ -21,19 +21,27 @@ export default function OrderDetail() {
   const [couriers, setCouriers] = useState([]);
 
   const [verifyNote, setVerifyNote] = useState("");
+  const [nikInput, setNikInput] = useState("");
+  const [invalid, setInvalid] = useState(new Set());
   const [alloc, setAlloc] = useState({});
   const [sched, setSched] = useState({ technician_id: "", tanggal: "", jam: "", jenis_kegiatan: "delivery", catatan: "" });
   const [payNote, setPayNote] = useState({});
   const [busy, setBusy] = useState(false);
 
   const load = () => {
-    api.get(`/admin/orders/${id}`).then((r) => setData(r.data)).catch((e) => toast.error(fmtErr(e)));
+    api.get(`/admin/orders/${id}`).then((r) => {
+      setData(r.data);
+      setNikInput(r.data.customer?.nik || "");
+    }).catch((e) => toast.error(fmtErr(e)));
     api.get("/admin/units", { params: { status: "ready" } }).then((r) => setReadyUnits(r.data)).catch(() => {});
     api.get("/admin/technicians").then((r) => setTechnicians(r.data)).catch(() => {});
     api.get("/admin/couriers").then((r) => setCouriers(r.data)).catch(() => {});
   };
   useEffect(load, [id]);
   usePolling(load, 15000);
+
+  const iv = (k) => invalidCls(invalid.has(k));
+  const nikValid = /^\d{16}$/.test(nikInput.trim());
 
   const allocValid = useMemo(() => {
     if (!data) return false;
@@ -55,9 +63,14 @@ export default function OrderDetail() {
   }
 
   async function verify(hasil) {
+    if (hasil === "approved" && !nikValid) {
+      setInvalid(new Set(["nik"]));
+      return toast.error("Isi NIK customer 16 digit terlebih dahulu sebelum menyetujui");
+    }
+    setInvalid(new Set());
     setBusy(true);
     try {
-      await api.post(`/admin/orders/${id}/verify`, { hasil, catatan: verifyNote });
+      await api.post(`/admin/orders/${id}/verify`, { hasil, catatan: verifyNote, nik: nikInput.trim() });
       toast.success(hasil === "approved" ? "Pengajuan disetujui — kontrak digital diterbitkan" : "Pengajuan ditolak");
       setVerifyNote("");
       load();
@@ -130,6 +143,7 @@ export default function OrderDetail() {
             <div className="grid sm:grid-cols-2 gap-x-8 gap-y-3 text-sm">
               <p><span className="text-slate-400 block text-xs">Nama</span>{customer.nama}</p>
               <p><span className="text-slate-400 block text-xs">Kontak</span>{customer.email} · {customer.no_hp}</p>
+              <p><span className="text-slate-400 block text-xs">NIK</span><span data-testid="customer-nik">{customer.nik || "Belum diisi admin"}</span></p>
               <p><span className="text-slate-400 block text-xs">Status Hunian</span>{customer.status_hunian} {order.jenis_ruangan ? `· ${order.jenis_ruangan}` : ""}</p>
               <p><span className="text-slate-400 block text-xs">Penjamin Lokasi</span>{customer.nama_pj_lokasi || "-"} {customer.no_hp_pj_lokasi ? `(${customer.no_hp_pj_lokasi})` : ""}</p>
               <p className="sm:col-span-2"><span className="text-slate-400 block text-xs">Alamat KTP</span>{customer.alamat_ktp}</p>
@@ -225,10 +239,15 @@ export default function OrderDetail() {
           {order.status === "pending" && (
             <section className="bg-white border-2 border-amber-200 rounded-xl p-6" data-testid="verify-section">
               <h2 className="font-heading font-bold text-slate-800 mb-2">Verifikasi Pengajuan</h2>
-              <p className="text-xs text-slate-500 mb-4">Menyetujui akan menerbitkan kontrak digital untuk ditandatangani customer. Alokasi unit dilakukan setelah kontrak ditandatangani.</p>
+              <p className="text-xs text-slate-500 mb-4">Menyetujui akan menerbitkan kontrak digital untuk ditandatangani customer. NIK wajib diisi sebelum pengajuan disetujui.</p>
+              <div className="mb-4 max-w-sm">
+                <Label>NIK Customer *</Label>
+                <Input data-testid="verify-nik" value={nikInput} onChange={(e) => { setNikInput(e.target.value.replace(/\D/g, "").slice(0, 16)); if (invalid.has("nik")) setInvalid(new Set()); }} className={`mt-1.5 ${iv("nik")}`} placeholder="16 digit NIK sesuai KTP" inputMode="numeric" />
+                <p className="text-xs text-slate-500 mt-1">NIK tersimpan ke data customer dan dipakai pada kontrak sewa.</p>
+              </div>
               <Textarea data-testid="verify-note" value={verifyNote} onChange={(e) => setVerifyNote(e.target.value)} placeholder="Catatan verifikasi (opsional)" rows={2} />
               <div className="flex gap-3 mt-4 flex-wrap">
-                <Button data-testid="btn-approve" disabled={busy} onClick={() => verify("approved")} className="rounded-full bg-emerald-600 hover:bg-emerald-700"><CheckCircle2 className="w-4 h-4 mr-2" /> Setujui</Button>
+                <Button data-testid="btn-approve" disabled={busy || !nikValid} onClick={() => verify("approved")} className="rounded-full bg-emerald-600 hover:bg-emerald-700"><CheckCircle2 className="w-4 h-4 mr-2" /> Setujui</Button>
                 <Button data-testid="btn-reject" disabled={busy} onClick={() => verify("rejected")} variant="outline" className="rounded-full text-red-600 border-red-200 hover:bg-red-50"><XCircle className="w-4 h-4 mr-2" /> Tolak</Button>
               </div>
             </section>
@@ -282,7 +301,10 @@ export default function OrderDetail() {
             <section className="bg-white border border-slate-200 rounded-xl p-6" data-testid="invoice-admin">
               <div className="flex items-center justify-between flex-wrap gap-2 mb-4">
                 <h2 className="font-heading font-bold text-slate-800 flex items-center gap-2"><Receipt className="w-5 h-5 text-[#0047AB]" /> Invoice {invoice.nomor}</h2>
-                <StatusBadge status={invoice.status} map={INVOICE_STATUS} testid="invoice-status-admin" />
+                <div className="flex items-center gap-3">
+                  <a href={`${API}/admin/invoices/${invoice.id}/download`} data-testid="invoice-download-admin" className="text-xs font-semibold text-[#0047AB] hover:underline">Unduh Invoice DOCX</a>
+                  <StatusBadge status={invoice.status} map={INVOICE_STATUS} testid="invoice-status-admin" />
+                </div>
               </div>
               <div className="space-y-1.5 text-sm">
                 {invoice.items.map((it, i) => (

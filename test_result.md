@@ -101,3 +101,95 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+
+## user_problem_statement: Revisi UI + backend CollerMind: autocomplete wilayah, section form bebas dilihat dengan validasi akhir + indikator merah, usulan pengiriman H+3, instalasi jam-only H+1 setelah delivered, NIK admin sebagai gate verifikasi, email langkah selanjutnya, polling realtime semua page, invoice DOCX dari template user, kontrak sewa v02 dengan cabang/NIB/alamat PT sesuai kota/kabupaten.
+## backend:
+##   - task: "Kontrak sewa v02 + invoice DOCX template user"
+##     implemented: true
+##     working: true
+##     file: "/app/backend/contract_service.py"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##         - working: true
+##         - agent: "main"
+##         - comment: "Template Surat Sewa_v02.docx dan template invoice.docx dipasang ke /app/backend/assets. Generate contract/invoice via endpoint publik menghasilkan DOCX tanpa placeholder tersisa; render dxpdf+pymupdf dicek. Pytest 62/62 pass setelah update assertion guard status completed."
+##   - task: "Schedule rules H+3 delivery dan installation jam-only H+1"
+##     implemented: true
+##     working: true
+##     file: "/app/backend/routes_public.py"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##         - working: true
+##         - agent: "main"
+##         - comment: "Delivery request wajib tanggal minimal H+3 Asia/Jakarta. Installation request tidak lagi butuh tanggal dari customer; backend menghitung installation_date H+1 dari delivered_at dan hanya validasi slot jam."
+##   - task: "NIK admin sebagai syarat approve"
+##     implemented: true
+##     working: true
+##     file: "/app/backend/routes_admin.py"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##         - working: true
+##         - agent: "main"
+##         - comment: "VerifyBody menerima nik; approve menolak bila NIK bukan 16 digit dan menyimpan NIK ke customer sebelum menerbitkan kontrak."
+## frontend:
+##   - task: "Rental form section bebas + autocomplete wilayah + validasi akhir"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/src/pages/public/RentalForm.jsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##         - working: true
+##         - agent: "main"
+##         - comment: "Stepper clickable dan tombol Lanjut tidak memblokir; submit akhir menandai field wajib merah dan scroll ke section pertama yang invalid. Wilayah memakai input datalist autocomplete untuk provinsi/kota/kecamatan/kelurahan."
+##   - task: "Tracking customer: H+3, instalasi jam-only, kontras upload, invoice download"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/src/pages/public/Tracking.jsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##         - working: true
+##         - agent: "main"
+##         - comment: "Tracking memakai min date H+3 untuk delivery, installation date otomatis dari full.installation_date, indikator merah untuk form lokasi/slot, dan link Unduh Invoice per invoice."
+##   - task: "Polling realtime semua halaman"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/src/pages/admin/*, tech/*, courier/*"
+##     stuck_count: 0
+##     priority: "medium"
+##     needs_retesting: true
+##     status_history:
+##         - working: true
+##         - agent: "main"
+##         - comment: "usePolling ditambahkan/dipastikan di dashboard/list/detail admin, teknisi, kurir, tracking. Frontend build sukses."
+## metadata:
+##   created_by: "main_agent"
+##   version: "1.0"
+##   test_sequence: 4
+##   run_ui: true
+## test_plan:
+##   current_focus:
+##     - "Backend regression pytest pasca refactor + fitur baru"
+##     - "Contract/invoice DOCX branch mapping dan placeholder bersih"
+##     - "Frontend /sewa autocomplete, section bebas, validasi akhir merah"
+##     - "Tracking H+3 delivery, installation jam-only H+1, invoice download"
+##     - "Admin NIK gate verifikasi"
+##   stuck_tasks: []
+##   test_all: true
+##   test_priority: "high_first"
+## agent_communication:
+##     - agent: "main"
+##       - message: "Mohon testing E2E untuk revisi UI/backend terbaru. Kredensial admin/teknisi/kurir sama seperti test_credentials.md. Order existing CLM-20260817-8U8U/082112223333 bisa dipakai untuk invoice/contract download; hindari submit rental sukses berulang karena rate limit 5/jam."
+
+## agent_communication:
+##     - agent: "main"
+##       - message: "Post-iteration_4 fixes selesai: toast polling tracking di-gate status delivered + silent refresh; copy kontrak hanya sebut PDF bila pdf_path ada; NIK approve API strict body.nik 16 digit; rate-limit rental dicek setelah validasi payload agar payload invalid tetap 422; usePolling pause saat tab hidden; logging exception di contract_service; date picker customer tracking diganti shadcn Calendar. Verifikasi ulang: pytest 87 passed/1 skipped, yarn build sukses, supervisor restart frontend, self-test tracking CLM-20260817-8U8U menunggu 23s tanpa toast error."

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Landmark, Save } from "lucide-react";
 import { toast } from "sonner";
 import api, { fmtErr } from "@/lib/api";
+import { usePolling } from "@/lib/usePolling";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,11 +12,11 @@ export default function Settings() {
   const [regions, setRegions] = useState({});
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    api.get("/admin/settings/bank-accounts")
+  const load = () => api.get("/admin/settings/bank-accounts")
       .then((r) => { setAccounts(r.data.accounts); setRegions(r.data.regions); })
       .catch((e) => toast.error(fmtErr(e)));
-  }, []);
+  useEffect(() => { load(); }, []); // eslint-disable-line
+  usePolling(load, 30000);
 
   async function save() {
     setBusy(true);

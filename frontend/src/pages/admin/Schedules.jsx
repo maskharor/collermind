@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import api, { fmtErr } from "@/lib/api";
 import { JENIS_KEGIATAN, StatusBadge } from "@/components/StatusBadge";
+import { usePolling } from "@/lib/usePolling";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
@@ -10,11 +11,11 @@ export default function Schedules() {
   const [schedules, setSchedules] = useState([]);
   const [tanggal, setTanggal] = useState("");
 
-  useEffect(() => {
-    api.get("/admin/schedules", { params: tanggal ? { tanggal } : {} })
+  const load = () => api.get("/admin/schedules", { params: tanggal ? { tanggal } : {} })
       .then((r) => setSchedules(r.data))
       .catch((e) => toast.error(fmtErr(e)));
-  }, [tanggal]);
+  useEffect(() => { load(); }, [tanggal]); // eslint-disable-line
+  usePolling(load, 15000);
 
   return (
     <div data-testid="admin-schedules">

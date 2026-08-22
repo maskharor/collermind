@@ -2,18 +2,19 @@ import { useEffect, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { ArrowLeft, MapPin, Phone, UploadCloud, Send, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import api, { fmtErr, rupiah } from "@/lib/api";
+import api, { fmtErr, rupiah, invalidCls } from "@/lib/api";
 import { StatusBadge } from "@/components/StatusBadge";
+import { usePolling } from "@/lib/usePolling";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
-function PhotoField({ label, testid, file, onChange }) {
+function PhotoField({ label, testid, file, onChange, invalid }) {
   return (
     <div>
       <Label className="text-xs font-bold uppercase tracking-[0.15em] text-slate-500">{label} *</Label>
-      <label data-testid={`${testid}-area`} className="mt-2 flex items-center justify-center gap-3 border-2 border-dashed border-slate-300 rounded-2xl p-5 cursor-pointer hover:border-[#0047AB] hover:bg-slate-50 transition-colors min-h-[48px]">
+      <label data-testid={`${testid}-area`} className={`mt-2 flex items-center justify-center gap-3 border-2 border-dashed border-slate-300 rounded-2xl p-5 cursor-pointer hover:border-[#0047AB] hover:bg-slate-50 transition-colors min-h-[48px] ${invalidCls(invalid)}`}>
         <UploadCloud className="w-6 h-6 text-slate-400" />
         <span className="text-sm text-slate-600 font-medium">{file ? file.name : "Ambil / pilih foto"}</span>
         <input data-testid={testid} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" className="hidden" onChange={(e) => onChange(e.target.files[0] || null)} />
@@ -31,17 +32,22 @@ export default function CourierTask() {
   const [fotoSurat, setFotoSurat] = useState(null);
   const [fotoSerah, setFotoSerah] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [invalid, setInvalid] = useState(new Set());
 
-  useEffect(() => {
-    api.get(`/courier/schedules/${id}`).then((r) => setData(r.data)).catch((e) => toast.error(fmtErr(e)));
-  }, [id]);
+  const load = () => api.get(`/courier/schedules/${id}`).then((r) => setData(r.data)).catch((e) => toast.error(fmtErr(e)));
+  useEffect(() => { load(); }, [id]); // eslint-disable-line
+  usePolling(load, 15000);
 
   if (!data) return <p className="text-slate-400">Memuat...</p>;
   const { schedule, order, customer, units } = data;
   const isDone = schedule.status === "done";
 
   async function submit() {
-    if (!fotoSurat || !fotoSerah) return toast.error("Kedua foto bukti wajib diunggah");
+    if (!fotoSurat || !fotoSerah) {
+      setInvalid(new Set([!fotoSurat && "foto_surat", !fotoSerah && "foto_serah"].filter(Boolean)));
+      return toast.error("Kedua foto bukti wajib diunggah");
+    }
+    setInvalid(new Set());
     setBusy(true);
     try {
       const fd = new FormData();
@@ -98,8 +104,8 @@ export default function CourierTask() {
         <section className="bg-white border border-slate-200 rounded-2xl p-5 mt-4 mb-10" data-testid="delivery-form">
           <h2 className="font-heading font-bold text-slate-800 mb-4">Bukti Serah Terima</h2>
           <div className="space-y-4">
-            <PhotoField label="Foto Surat Tanda Terima (sudah ditandatangani)" testid="foto-surat-jalan" file={fotoSurat} onChange={setFotoSurat} />
-            <PhotoField label="Foto Customer dengan Unit AC" testid="foto-serah-terima" file={fotoSerah} onChange={setFotoSerah} />
+            <PhotoField label="Foto Surat Tanda Terima (sudah ditandatangani)" testid="foto-surat-jalan" file={fotoSurat} invalid={invalid.has("foto_surat")} onChange={(f) => { setFotoSurat(f); if (f && invalid.has("foto_surat")) { const n = new Set(invalid); n.delete("foto_surat"); setInvalid(n); } }} />
+            <PhotoField label="Foto Customer dengan Unit AC" testid="foto-serah-terima" file={fotoSerah} invalid={invalid.has("foto_serah")} onChange={(f) => { setFotoSerah(f); if (f && invalid.has("foto_serah")) { const n = new Set(invalid); n.delete("foto_serah"); setInvalid(n); } }} />
             <div><Label>Kondisi Unit</Label><Input data-testid="delivery-kondisi" value={kondisi} onChange={(e) => setKondisi(e.target.value)} className="mt-1.5 h-12" placeholder="Contoh: baik, lengkap, segel" /></div>
             <div><Label>Catatan</Label><Textarea data-testid="delivery-catatan" value={catatan} onChange={(e) => setCatatan(e.target.value)} rows={3} className="mt-1.5" /></div>
             <Button data-testid="btn-submit-delivery" onClick={submit} disabled={busy} className="w-full h-12 rounded-full bg-[#0047AB] hover:bg-[#003a8c] font-semibold">

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import api, { fmtErr } from "@/lib/api";
+import { usePolling } from "@/lib/usePolling";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 
@@ -9,9 +10,9 @@ export default function Customers() {
   const [customers, setCustomers] = useState([]);
   const [q, setQ] = useState("");
 
-  useEffect(() => {
-    api.get("/admin/customers").then((r) => setCustomers(r.data)).catch((e) => toast.error(fmtErr(e)));
-  }, []);
+  const load = () => api.get("/admin/customers").then((r) => setCustomers(r.data)).catch((e) => toast.error(fmtErr(e)));
+  useEffect(() => { load(); }, []); // eslint-disable-line
+  usePolling(load, 15000);
 
   const filtered = customers.filter((c) =>
     [c.nama, c.email, c.no_hp].join(" ").toLowerCase().includes(q.toLowerCase())
