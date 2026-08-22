@@ -128,14 +128,30 @@ class RentalPayload(BaseModel):
 
 @router.post("/api/public/rentals")
 async def submit_rental(request: Request, payload: str = Form(...), ktp: UploadFile = File(...)):
-    ip = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() or (request.client.host if request.client else "unknown")
+    ip = _client_ip(request)
     data = _parse_rental_payload(payload)
     details = await _build_order_details(data.items)
     await _check_rate_limit(ip)
-    alamat_pemasangan = f"{data.detail_alamat}, Kel. {data.kelurahan}, Kec. {data.kecamatan}, {data.kota_kab}, {data.provinsi}"
+    estimasi = _build_estimasi(details)
+    ktp_path = await save_image(db, ktp, "ktp")
+    customer_id = await _upsert_customer(data, ktp_path, _alamat_pemasangan(data))
+    order = _new_order_doc(data, details, estimasi, customer_id, ktp_path, ip)
+    await db.rental_orders.insert_one(order)
+    await notify_event(order["id"], "order_created")
+    return {"kode": order["kode"], "estimasi": estimasi, "status": "pending"}
 
+
+def _client_ip(request: Request) -> str:
+    return (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() or (request.client.host if request.client else "unknown")
+
+
+def _alamat_pemasangan(data) -> str:
+    return f"{data.detail_alamat}, Kel. {data.kelurahan}, Kec. {data.kecamatan}, {data.kota_kab}, {data.provinsi}"
+
+
+def _build_estimasi(details: list) -> dict:
     sewa = sum(d["subtotal"] for d in details)
-    estimasi = {
+    return {
         "sewa_bulanan": sewa,
         "sewa_bulan_pertama": sewa,
         "jasa_pasang": JASA_PASANG,
@@ -144,14 +160,12 @@ async def submit_rental(request: Request, payload: str = Form(...), ktp: UploadF
         "total": sewa + JASA_PASANG + JASA_LEPAS,
     }
 
-    ktp_path = await save_image(db, ktp, "ktp")
-    customer_id = await _upsert_customer(data, ktp_path, alamat_pemasangan)
 
+def _new_order_doc(data, details: list, estimasi: dict, customer_id: str, ktp_path: str, ip: str) -> dict:
     order_id = new_id()
-    kode = gen_kode()
-    order = {
+    return {
         "id": order_id,
-        "kode": kode,
+        "kode": gen_kode(),
         "customer_id": customer_id,
         "tanggal_pengajuan": now_iso(),
         "tanggal_mulai": data.tanggal_mulai,
@@ -176,9 +190,6 @@ async def submit_rental(request: Request, payload: str = Form(...), ktp: UploadF
         "updated_at": now_iso(),
         "deleted_at": None,
     }
-    await db.rental_orders.insert_one(order)
-    await notify_event(order_id, "order_created")
-    return {"kode": kode, "estimasi": estimasi, "status": "pending"}
 
 
 async def _check_rate_limit(ip: str):
@@ -503,38 +514,35 @@ class ScheduleRequestBody(BaseModel):
         return v
 
 
-@router.post("/api/public/schedule-request")
-async def schedule_request(body: ScheduleRequestBody):
-    order, customer = await verify_public_access(body.kode, body.kontak)
-    if order.get("contract_status") != "signed":
-        raise HTTPException(status_code=400, detail="Tandatangani kontrak terlebih dahulu")
-    if body.jenis == "delivery":
-        if not body.tanggal:
-            raise HTTPException(status_code=400, detail="Pilih tanggal usulan pengiriman")
-        d = datetime.strptime(body.tanggal, "%Y-%m-%d").date()
-        min_delivery = datetime.now(JAKARTA).date() + timedelta(days=3)
-        if d < min_delivery:
-            raise HTTPException(status_code=400, detail=f"Tanggal pengiriman minimal H+3 ({min_delivery.isoformat()} atau setelahnya)")
-        if not order.get("lokasi_detail"):
-            raise HTTPException(status_code=400, detail="Isi form detail lokasi terlebih dahulu")
-        if order["status"] != "verified":
-            raise HTTPException(status_code=400, detail=f"Pengajuan berstatus {order['status']}, tidak dapat mengusulkan jadwal pengiriman")
-    elif body.jenis == "installation":
-        if order["status"] != "delivered":
-            raise HTTPException(status_code=400, detail="Jadwal instalasi dapat dipilih setelah unit diterima")
-        if body.jam not in SLOT_TIMES:
-            raise HTTPException(status_code=400, detail="Pilih slot jam yang tersedia")
-        _, installation_date = await _delivery_info(order)
-        if not installation_date:
-            raise HTTPException(status_code=400, detail="Menunggu konfirmasi unit AC berhasil terkirim")
-        body.tanggal = installation_date
-        slots = await available_slots(installation_date)
-        slot = next((s for s in slots["slots"] if s["jam"] == body.jam), None)
-        if not slot or not slot["tersedia"]:
-            raise HTTPException(status_code=400, detail="Slot tersebut sudah penuh, pilih slot lain")
-    else:
-        raise HTTPException(status_code=400, detail="Jenis jadwal tidak valid")
+async def _validate_delivery_schedule(order: dict, body: ScheduleRequestBody) -> None:
+    if not body.tanggal:
+        raise HTTPException(status_code=400, detail="Pilih tanggal usulan pengiriman")
+    d = datetime.strptime(body.tanggal, "%Y-%m-%d").date()
+    min_delivery = datetime.now(JAKARTA).date() + timedelta(days=3)
+    if d < min_delivery:
+        raise HTTPException(status_code=400, detail=f"Tanggal pengiriman minimal H+3 ({min_delivery.isoformat()} atau setelahnya)")
+    if not order.get("lokasi_detail"):
+        raise HTTPException(status_code=400, detail="Isi form detail lokasi terlebih dahulu")
+    if order["status"] != "verified":
+        raise HTTPException(status_code=400, detail=f"Pengajuan berstatus {order['status']}, tidak dapat mengusulkan jadwal pengiriman")
 
+
+async def _resolve_installation_schedule(order: dict, body: ScheduleRequestBody) -> str:
+    if order["status"] != "delivered":
+        raise HTTPException(status_code=400, detail="Jadwal instalasi dapat dipilih setelah unit diterima")
+    if body.jam not in SLOT_TIMES:
+        raise HTTPException(status_code=400, detail="Pilih slot jam yang tersedia")
+    _, installation_date = await _delivery_info(order)
+    if not installation_date:
+        raise HTTPException(status_code=400, detail="Menunggu konfirmasi unit AC berhasil terkirim")
+    slots = await available_slots(installation_date)
+    slot = next((s for s in slots["slots"] if s["jam"] == body.jam), None)
+    if not slot or not slot["tersedia"]:
+        raise HTTPException(status_code=400, detail="Slot tersebut sudah penuh, pilih slot lain")
+    return installation_date
+
+
+async def _create_schedule_request(order: dict, body: ScheduleRequestBody) -> dict:
     await db.schedule_requests.update_many(
         {"order_id": order["id"], "status": "pending", "jenis": body.jenis},
         {"$set": {"status": "replaced"}},
@@ -547,6 +555,20 @@ async def schedule_request(body: ScheduleRequestBody):
     await db.schedule_requests.insert_one(doc)
     doc.pop("_id", None)
     return doc
+
+
+@router.post("/api/public/schedule-request")
+async def schedule_request(body: ScheduleRequestBody):
+    order, customer = await verify_public_access(body.kode, body.kontak)
+    if order.get("contract_status") != "signed":
+        raise HTTPException(status_code=400, detail="Tandatangani kontrak terlebih dahulu")
+    if body.jenis == "delivery":
+        await _validate_delivery_schedule(order, body)
+    elif body.jenis == "installation":
+        body.tanggal = await _resolve_installation_schedule(order, body)
+    else:
+        raise HTTPException(status_code=400, detail="Jenis jadwal tidak valid")
+    return await _create_schedule_request(order, body)
 
 
 # ---------- Perpanjangan sewa (open-ended) ----------

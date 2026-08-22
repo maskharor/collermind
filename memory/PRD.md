@@ -58,3 +58,10 @@ Digitalisasi proses bisnis penyewaan AC (sebelumnya manual via spreadsheet): pen
 ## Backlog Minor
 - Konsistensi date picker shadcn untuk filter/form internal admin (Schedules filter, OrderDetail schedule date) menyusul; date picker customer sudah shadcn.
 - Skala admin list: tambahkan pagination/search server-side bila data orders/customers sudah besar.
+
+
+## Update Code Quality 2026-08-22
+- Critical: `detect_pt_branch` kini menginisialisasi `code = "EKOKO"` dan memakai ordered branch rules lookup, menghilangkan risiko unbound variable dan nested if berlapis.
+- Refactor kompleksitas: `generate_invoice_docx` dipecah ke `_invoice_context`, `_invoice_subs`, `_fill_invoice_tables`; `routes_admin.order_detail/verify_order/allocate_units/reports`, `routes_public.submit_rental/schedule_request`, dan `routes_tech.submit_work` dipecah ke helper validasi/persistence tanpa mengubah kontrak API.
+- Type hints ditambahkan progresif pada helper business logic yang disentuh (contract_service, routes_admin, routes_public, routes_tech, notify `_build`/`notify_event`). Perbandingan `is None`/`is not None` yang dilaporkan analyzer dicek: semuanya valid untuk singleton None sehingga tidak diubah menjadi `==`.
+- Verifikasi: py_compile OK, pytest 88 passed, contract/invoice DOCX regenerate leftover placeholder = 0 dan invoice dirender ulang.

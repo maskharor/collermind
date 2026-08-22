@@ -99,6 +99,58 @@ async def _work_return(order: dict, base: dict, form: dict, user: dict):
     await set_order_status(order["id"], "returned", user["name"], base["catatan"])
 
 
+async def _load_work_context(sid: str, user: dict):
+    s = await db.schedules.find_one({"id": sid, "technician_id": user["id"]}, {"_id": 0})
+    if not s:
+        raise HTTPException(status_code=404, detail="Jadwal tidak ditemukan")
+    if s["status"] == "done":
+        raise HTTPException(status_code=400, detail="Pekerjaan sudah diselesaikan")
+    order = await db.rental_orders.find_one({"id": s["rental_order_id"]}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order tidak ditemukan")
+    customer = await db.customers.find_one({"id": order["customer_id"]}, {"_id": 0})
+    return s, order, customer
+
+
+async def _primary_work_photo(foto: Optional[UploadFile], foto_paths: list) -> Optional[str]:
+    foto_path = await save_image(db, foto, "pekerjaan") if foto and foto.filename else None
+    if foto_paths and not foto_path:
+        return foto_paths[0]
+    return foto_path
+
+
+def _work_base(order: dict, user: dict, catatan: str, foto_path: Optional[str]) -> dict:
+    return {
+        "id": new_id(), "rental_order_id": order["id"], "technician_id": user["id"],
+        "tanggal": now_iso(), "foto": foto_path, "catatan": catatan, "created_at": now_iso(),
+    }
+
+
+def _work_form_dict(hasil: str, kondisi: str, jenis_maintenance: str, denda: float, pipa_dibawa: float,
+                    pipa_terpakai: float, ducttape_terpakai: str, kabel_terpakai: str, helper: str,
+                    koordinat_sesuai: str, edukasi_customer: str) -> dict:
+    return {
+        "hasil": hasil, "kondisi": kondisi, "jenis_maintenance": jenis_maintenance,
+        "denda": denda, "pipa_dibawa": pipa_dibawa, "pipa_terpakai": pipa_terpakai,
+        "ducttape_terpakai": ducttape_terpakai, "kabel_terpakai": kabel_terpakai,
+        "helper": helper, "koordinat_sesuai": koordinat_sesuai, "edukasi_customer": edukasi_customer,
+    }
+
+
+async def _dispatch_work(jenis: str, order: dict, customer: dict, base: dict, form: dict, foto_paths: list, user: dict) -> None:
+    unit_ids = order_unit_ids(order)
+    if jenis == "delivery":
+        await _work_delivery(order, base, form["kondisi"], user)
+    elif jenis == "installation":
+        await _work_installation(order, customer, base, unit_ids, form, foto_paths, user)
+    elif jenis == "maintenance":
+        await _work_maintenance(order, base, form, user)
+    elif jenis in ("dismantling", "return"):
+        await _work_return(order, base, form, user)
+    elif jenis != "inspection":
+        raise HTTPException(status_code=400, detail="Jenis kegiatan tidak valid")
+
+
 @router.post("/schedules/{sid}/submit")
 async def submit_work(
     sid: str,
@@ -118,47 +170,14 @@ async def submit_work(
     request: Request = None,
     user=Tech,
 ):
-    s = await db.schedules.find_one({"id": sid, "technician_id": user["id"]}, {"_id": 0})
-    if not s:
-        raise HTTPException(status_code=404, detail="Jadwal tidak ditemukan")
-    if s["status"] == "done":
-        raise HTTPException(status_code=400, detail="Pekerjaan sudah diselesaikan")
-    order = await db.rental_orders.find_one({"id": s["rental_order_id"]}, {"_id": 0})
-    if not order:
-        raise HTTPException(status_code=404, detail="Order tidak ditemukan")
-    customer = await db.customers.find_one({"id": order["customer_id"]}, {"_id": 0})
-
+    s, order, customer = await _load_work_context(sid, user)
     jenis = s["jenis_kegiatan"]
-    foto_path = await save_image(db, foto, "pekerjaan") if foto and foto.filename else None
     foto_paths = await _save_installation_photos(request, jenis)
-    if foto_paths and not foto_path:
-        foto_path = foto_paths[0]
-
-    base = {
-        "id": new_id(), "rental_order_id": order["id"], "technician_id": user["id"],
-        "tanggal": now_iso(), "foto": foto_path, "catatan": catatan, "created_at": now_iso(),
-    }
-    form = {
-        "hasil": hasil, "kondisi": kondisi, "jenis_maintenance": jenis_maintenance,
-        "denda": denda, "pipa_dibawa": pipa_dibawa, "pipa_terpakai": pipa_terpakai,
-        "ducttape_terpakai": ducttape_terpakai, "kabel_terpakai": kabel_terpakai,
-        "helper": helper, "koordinat_sesuai": koordinat_sesuai, "edukasi_customer": edukasi_customer,
-    }
-    unit_ids = order_unit_ids(order)
-
-    if jenis == "delivery":
-        await _work_delivery(order, base, kondisi, user)
-    elif jenis == "installation":
-        await _work_installation(order, customer, base, unit_ids, form, foto_paths, user)
-    elif jenis == "maintenance":
-        await _work_maintenance(order, base, form, user)
-    elif jenis in ("dismantling", "return"):
-        await _work_return(order, base, form, user)
-    elif jenis == "inspection":
-        pass
-    else:
-        raise HTTPException(status_code=400, detail="Jenis kegiatan tidak valid")
-
+    foto_path = await _primary_work_photo(foto, foto_paths)
+    base = _work_base(order, user, catatan, foto_path)
+    form = _work_form_dict(hasil, kondisi, jenis_maintenance, denda, pipa_dibawa, pipa_terpakai,
+                           ducttape_terpakai, kabel_terpakai, helper, koordinat_sesuai, edukasi_customer)
+    await _dispatch_work(jenis, order, customer, base, form, foto_paths, user)
     await db.schedules.update_one({"id": sid}, {"$set": {"status": "done"}})
     return {"ok": True}
 

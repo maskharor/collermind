@@ -192,19 +192,40 @@ async def list_orders(status: Optional[str] = None, user=Admin):
     return orders
 
 
-@router.get("/orders/{order_id}")
-async def order_detail(order_id: str, user=Admin):
-    order = await get_order(order_id)
-    customer = await db.customers.find_one({"id": order["customer_id"]}, {"_id": 0})
+async def _verification_with_name(order_id: str) -> Optional[dict]:
     verification = await db.verifications.find_one({"rental_order_id": order_id}, {"_id": 0})
     if verification:
         v = await db.users.find_one({"id": verification["verified_by"]}, {"_id": 0, "name": 1})
         verification["verified_by_name"] = v["name"] if v else "-"
-    schedules = await db.schedules.find({"rental_order_id": order_id}, {"_id": 0}).sort("tanggal", 1).to_list(100)
+    return verification
+
+
+async def _enrich_schedule_assignees(schedules: list) -> list:
     for s in schedules:
         t = await db.users.find_one({"id": s["technician_id"]}, {"_id": 0, "name": 1, "role": 1})
         s["technician_name"] = t["name"] if t else "-"
         s["assignee_role"] = t["role"] if t else "-"
+    return schedules
+
+
+async def _payments_for_invoices(invoices: list) -> list:
+    invoice_ids = [i["id"] for i in invoices]
+    payments = await db.payments.find({"invoice_id": {"$in": invoice_ids}}, {"_id": 0}).sort("created_at", -1).to_list(50) if invoice_ids else []
+    nomor_by_id = {i["id"]: i["nomor"] for i in invoices}
+    for p in payments:
+        if p.get("verified_by"):
+            v = await db.users.find_one({"id": p["verified_by"]}, {"_id": 0, "name": 1})
+            p["verified_by_name"] = v["name"] if v else "-"
+        p["invoice_nomor"] = nomor_by_id.get(p["invoice_id"], "-")
+    return payments
+
+
+@router.get("/orders/{order_id}")
+async def order_detail(order_id: str, user=Admin):
+    order = await get_order(order_id)
+    customer = await db.customers.find_one({"id": order["customer_id"]}, {"_id": 0})
+    verification = await _verification_with_name(order_id)
+    schedules = await _enrich_schedule_assignees(await db.schedules.find({"rental_order_id": order_id}, {"_id": 0}).sort("tanggal", 1).to_list(100))
     deliveries = await db.deliveries.find({"rental_order_id": order_id}, {"_id": 0}).to_list(100)
     installations = await db.installations.find({"rental_order_id": order_id}, {"_id": 0}).to_list(100)
     maintenances = await db.maintenances.find({"rental_order_id": order_id}, {"_id": 0}).to_list(100)
@@ -212,13 +233,7 @@ async def order_detail(order_id: str, user=Admin):
     contract = await db.contracts.find_one({"order_id": order_id}, {"_id": 0})
     invoices = await db.invoices.find({"order_id": order_id}, {"_id": 0}).sort([("jenis", 1), ("periode", 1)]).to_list(50)
     invoice = next((i for i in invoices if i.get("jenis") == "first"), invoices[0] if invoices else None)
-    invoice_ids = [i["id"] for i in invoices]
-    payments = await db.payments.find({"invoice_id": {"$in": invoice_ids}}, {"_id": 0}).sort("created_at", -1).to_list(50) if invoice_ids else []
-    for p in payments:
-        if p.get("verified_by"):
-            v = await db.users.find_one({"id": p["verified_by"]}, {"_id": 0, "name": 1})
-            p["verified_by_name"] = v["name"] if v else "-"
-        p["invoice_nomor"] = next((i["nomor"] for i in invoices if i["id"] == p["invoice_id"]), "-")
+    payments = await _payments_for_invoices(invoices)
     schedule_requests = await db.schedule_requests.find({"order_id": order_id}, {"_id": 0}).sort("created_at", -1).to_list(20)
     unit_ids = order_unit_ids(order)
     units = await db.air_conditioners.find({"id": {"$in": unit_ids}}, {"_id": 0}).to_list(100) if unit_ids else []
@@ -237,40 +252,50 @@ class VerifyBody(BaseModel):
     nik: Optional[str] = ""
 
 
-@router.post("/orders/{order_id}/verify")
-async def verify_order(order_id: str, body: VerifyBody, user=Admin):
-    order = await get_order(order_id)
+def _assert_verifiable(order: dict, body: VerifyBody) -> None:
     if order["status"] != "pending":
         raise HTTPException(status_code=400, detail="Order sudah diverifikasi")
     if body.hasil not in ("approved", "rejected"):
         raise HTTPException(status_code=400, detail="Hasil verifikasi tidak valid")
 
+
+async def _save_customer_nik(order: dict, customer: Optional[dict], nik: str) -> None:
+    await db.customers.update_one({"id": order["customer_id"]}, {"$set": {"nik": nik, "updated_at": now_iso()}})
+    if customer is not None:
+        customer["nik"] = nik
+
+
+async def _create_pending_contract(order: dict, customer: dict) -> None:
+    await db.contracts.insert_one({
+        "id": new_id(), "order_id": order["id"], "kode": order["kode"],
+        "content": build_contract_content(order, customer or {}),
+        "status": "pending", "signer_name": None, "signed_at": None, "signer_ip": None,
+        "created_at": now_iso(),
+    })
+    await db.rental_orders.update_one({"id": order["id"]}, {"$set": {"contract_status": "pending"}})
+
+
+@router.post("/orders/{order_id}/verify")
+async def verify_order(order_id: str, body: VerifyBody, user=Admin):
+    order = await get_order(order_id)
+    _assert_verifiable(order, body)
     customer = await db.customers.find_one({"id": order["customer_id"]}, {"_id": 0})
     if body.hasil == "approved":
         nik = (body.nik or "").strip()
         if not (nik.isdigit() and len(nik) == 16):
             raise HTTPException(status_code=400, detail="NIK customer wajib 16 digit angka sebelum verifikasi disetujui")
-        await db.customers.update_one({"id": order["customer_id"]}, {"$set": {"nik": nik, "updated_at": now_iso()}})
-        if customer:
-            customer["nik"] = nik
+        await _save_customer_nik(order, customer, nik)
 
     await db.verifications.insert_one({
         "id": new_id(), "rental_order_id": order_id, "verified_by": user["id"],
         "tanggal_verifikasi": now_iso(), "hasil": body.hasil,
         "catatan": body.catatan or "", "created_at": now_iso(),
     })
-
     if body.hasil == "rejected":
         await set_order_status(order_id, "rejected", user["name"], body.catatan or "")
         return {"ok": True, "status": "rejected"}
 
-    await db.contracts.insert_one({
-        "id": new_id(), "order_id": order_id, "kode": order["kode"],
-        "content": build_contract_content(order, customer or {}),
-        "status": "pending", "signer_name": None, "signed_at": None, "signer_ip": None,
-        "created_at": now_iso(),
-    })
-    await db.rental_orders.update_one({"id": order_id}, {"$set": {"contract_status": "pending"}})
+    await _create_pending_contract(order, customer or {})
     await set_order_status(order_id, "verified", user["name"], body.catatan or "")
     await notify_event(order_id, "contract_ready")
     return {"ok": True, "status": "verified"}
@@ -285,15 +310,7 @@ class AllocateBody(BaseModel):
     allocations: List[Allocation]
 
 
-@router.post("/orders/{order_id}/allocate")
-async def allocate_units(order_id: str, body: AllocateBody, user=Admin):
-    order = await get_order(order_id)
-    if order["status"] != "verified":
-        raise HTTPException(status_code=400, detail=f"Alokasi hanya dapat dilakukan pada status verified (saat ini: {order['status']})")
-    if order.get("contract_status") != "signed":
-        raise HTTPException(status_code=400, detail="Kontrak belum ditandatangani customer")
-
-    allocations = {a.detail_index: a.unit_ids for a in body.allocations}
+async def _validated_allocation(order: dict, allocations: dict[int, list[str]]) -> tuple[list, list]:
     new_details = []
     all_unit_ids = []
     for i, d in enumerate(order["details"]):
@@ -312,7 +329,17 @@ async def allocate_units(order_id: str, body: AllocateBody, user=Admin):
         all_unit_ids.extend(unit_ids)
     if len(set(all_unit_ids)) != len(all_unit_ids):
         raise HTTPException(status_code=400, detail="Unit yang sama dipilih lebih dari sekali")
+    return new_details, all_unit_ids
 
+
+@router.post("/orders/{order_id}/allocate")
+async def allocate_units(order_id: str, body: AllocateBody, user=Admin):
+    order = await get_order(order_id)
+    if order["status"] != "verified":
+        raise HTTPException(status_code=400, detail=f"Alokasi hanya dapat dilakukan pada status verified (saat ini: {order['status']})")
+    if order.get("contract_status") != "signed":
+        raise HTTPException(status_code=400, detail="Kontrak belum ditandatangani customer")
+    new_details, all_unit_ids = await _validated_allocation(order, {a.detail_index: a.unit_ids for a in body.allocations})
     await db.rental_orders.update_one({"id": order_id}, {"$set": {"details": new_details, "updated_at": now_iso()}})
     await set_units_status(all_unit_ids, "reserved")
     return {"ok": True}
@@ -580,14 +607,14 @@ async def complete_order(order_id: str, user=Admin):
 
 # ---------- Reports ----------
 
-@router.get("/reports")
-async def reports(user=Admin):
-    orders = await db.rental_orders.find({"deleted_at": None}, {"_id": 0, "status": 1, "total_biaya": 1, "denda": 1, "payment_status": 1, "paid_at": 1, "created_at": 1}).to_list(10000)
-    status_dist = {s: 0 for s in ORDER_STATUSES}
+def _status_distribution(orders: list) -> list:
+    dist = {s: 0 for s in ORDER_STATUSES}
     for o in orders:
-        status_dist[o["status"]] = status_dist.get(o["status"], 0) + 1
+        dist[o["status"]] = dist.get(o["status"], 0) + 1
+    return [{"status": k, "jumlah": v} for k, v in dist.items() if v]
 
-    verified_payments = await db.payments.find({"status": "verified"}, {"_id": 0, "jumlah": 1, "verified_at": 1}).to_list(10000)
+
+def _revenue_by_month(orders: list, verified_payments: list) -> list:
     monthly = {}
     for p in verified_payments:
         m = (p.get("verified_at") or "")[:7]
@@ -595,26 +622,29 @@ async def reports(user=Admin):
             monthly[m] = monthly.get(m, 0) + p.get("jumlah", 0)
     for o in orders:
         if o.get("payment_status") == "paid" and o.get("paid_at"):
-            m = o["paid_at"][:7]
-            monthly.setdefault(m, monthly.get(m, 0))
-    revenue_by_month = [{"bulan": k, "pendapatan": v} for k, v in sorted(monthly.items())][-12:]
+            monthly.setdefault(o["paid_at"][:7], monthly.get(o["paid_at"][:7], 0))
+    return [{"bulan": k, "pendapatan": v} for k, v in sorted(monthly.items())][-12:]
 
-    units = await db.air_conditioners.find({"deleted_at": None}, {"_id": 0, "status": 1}).to_list(1000)
-    unit_dist = {}
+
+def _unit_distribution(units: list) -> list:
+    dist = {}
     for u in units:
-        unit_dist[u["status"]] = unit_dist.get(u["status"], 0) + 1
+        dist[u["status"]] = dist.get(u["status"], 0) + 1
+    return [{"status": k, "jumlah": v} for k, v in dist.items()]
 
-    maint_count = await db.maintenances.count_documents({})
-    total_revenue = 0.0
-    for payment in verified_payments:
-        total_revenue += payment.get("jumlah", 0)
+
+@router.get("/reports")
+async def reports(user=Admin):
+    orders = await db.rental_orders.find({"deleted_at": None}, {"_id": 0, "status": 1, "total_biaya": 1, "denda": 1, "payment_status": 1, "paid_at": 1, "created_at": 1}).to_list(10000)
+    verified_payments = await db.payments.find({"status": "verified"}, {"_id": 0, "jumlah": 1, "verified_at": 1}).to_list(10000)
+    units = await db.air_conditioners.find({"deleted_at": None}, {"_id": 0, "status": 1}).to_list(1000)
     return {
-        "status_distribution": [{"status": k, "jumlah": v} for k, v in status_dist.items() if v],
-        "revenue_by_month": revenue_by_month,
-        "unit_distribution": [{"status": k, "jumlah": v} for k, v in unit_dist.items()],
+        "status_distribution": _status_distribution(orders),
+        "revenue_by_month": _revenue_by_month(orders, verified_payments),
+        "unit_distribution": _unit_distribution(units),
         "total_orders": len(orders),
-        "total_revenue": total_revenue,
-        "maintenance_count": maint_count,
+        "total_revenue": sum(p.get("jumlah", 0) for p in verified_payments),
+        "maintenance_count": await db.maintenances.count_documents({}),
     }
 
 

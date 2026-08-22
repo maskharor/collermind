@@ -193,3 +193,7 @@
 ## agent_communication:
 ##     - agent: "main"
 ##       - message: "Post-iteration_4 fixes selesai: toast polling tracking di-gate status delivered + silent refresh; copy kontrak hanya sebut PDF bila pdf_path ada; NIK approve API strict body.nik 16 digit; rate-limit rental dicek setelah validasi payload agar payload invalid tetap 422; usePolling pause saat tab hidden; logging exception di contract_service; date picker customer tracking diganti shadcn Calendar. Verifikasi ulang: pytest 87 passed/1 skipped, yarn build sukses, supervisor restart frontend, self-test tracking CLM-20260817-8U8U menunggu 23s tanpa toast error."
+
+## agent_communication:
+##     - agent: "main"
+##       - message: "Code quality review diterapkan. Backend py_compile OK; pytest 88 passed. Generate contract/invoice tetap bersih (0 placeholder). Catatan: temuan operator `is` hanya untuk None (`is None`/`is not None`) yang memang benar secara Python, jadi tidak diganti."

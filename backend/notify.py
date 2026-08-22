@@ -262,14 +262,14 @@ _BUILDERS = {
 }
 
 
-def _build(event: str, order: dict, customer: dict, extra: dict | None):
+def _build(event: str, order: dict, customer: dict, extra: dict | None) -> tuple[str, str, str] | None:
     builder = _BUILDERS.get(event)
     if not builder:
         return None
     return builder(order, customer, extra or {})
 
 
-async def notify_event(order_id: str, event: str, extra: dict | None = None):
+async def notify_event(order_id: str, event: str, extra: dict | None = None) -> None:
     order = await db.rental_orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         return

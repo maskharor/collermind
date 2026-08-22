@@ -3,6 +3,7 @@ import logging
 import re
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 from zoneinfo import ZoneInfo
 
 from docx import Document
@@ -35,6 +36,23 @@ PT_BRANCHES = {
     "KOBEKASI": {"nib": "1801260016316", "alamat": "Cluster Taman Jati Kramat Indah Jl. Jatikramat II Blok A. 111, Desa/Kelurahan Jatikramat, Kec. Jatiasih, Kota Bekasi, Provinsi Jawa Barat, Kode Pos: 17421"},
 }
 
+BranchMatcher = Callable[[str, str], bool]
+_BRANCH_RULES: list[tuple[BranchMatcher, str]] = [
+    (lambda kota, text: "tangerang selatan" in text or "tangsel" in text, "KOTANGSEL"),
+    (lambda kota, text: "kabupaten tangerang" in kota, "FAJARMULIA"),
+    (lambda kota, text: "tangerang" in text, "KOTANGERANG"),
+    (lambda kota, text: "depok" in text, "KODEPOK"),
+    (lambda kota, text: "kota bogor" in kota, "KOBOGOR"),
+    (lambda kota, text: "bogor" in text, "KABOGOR"),
+    (lambda kota, text: "kota bekasi" in kota, "KOBEKASI"),
+    (lambda kota, text: "bekasi" in text, "KABEKASI"),
+    (lambda kota, text: "jakarta pusat" in text, "JAKPUS"),
+    (lambda kota, text: "jakarta timur" in text, "JAKTIM"),
+    (lambda kota, text: "jakarta utara" in text, "JAKUT"),
+    (lambda kota, text: "jakarta barat" in text, "JAKBAR"),
+    (lambda kota, text: "jakarta selatan" in text, "JAKSEL"),
+]
+
 
 def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").lower().replace("adm.", "").replace("kab.", "kabupaten")).strip()
@@ -43,34 +61,11 @@ def _norm(text: str) -> str:
 def detect_pt_branch(kota_kab: str = "", alamat: str = "") -> dict:
     kota = _norm(kota_kab)
     text = f"{kota} {_norm(alamat)}"
-    if "tangerang selatan" in text or "tangsel" in text:
-        code = "KOTANGSEL"
-    elif "kabupaten tangerang" in kota:
-        code = "FAJARMULIA"
-    elif "tangerang" in text:
-        code = "KOTANGERANG"
-    elif "depok" in text:
-        code = "KODEPOK"
-    elif "kota bogor" in kota:
-        code = "KOBOGOR"
-    elif "bogor" in text:
-        code = "KABOGOR"
-    elif "kota bekasi" in kota:
-        code = "KOBEKASI"
-    elif "bekasi" in text:
-        code = "KABEKASI"
-    elif "jakarta pusat" in text:
-        code = "JAKPUS"
-    elif "jakarta timur" in text:
-        code = "JAKTIM"
-    elif "jakarta utara" in text:
-        code = "JAKUT"
-    elif "jakarta barat" in text:
-        code = "JAKBAR"
-    elif "jakarta selatan" in text:
-        code = "JAKSEL"
-    else:
-        code = "EKOKO"
+    code = "EKOKO"
+    for matches, branch_code in _BRANCH_RULES:
+        if matches(kota, text):
+            code = branch_code
+            break
     return {"code": code, **PT_BRANCHES[code]}
 
 
@@ -115,6 +110,7 @@ def _parse_dt(value) -> datetime:
             return dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(JAKARTA)
         return dt.astimezone(JAKARTA)
     except Exception:
+        logger.exception("invalid document datetime")
         return datetime.now(JAKARTA)
 
 
@@ -123,7 +119,7 @@ def _long_date(value) -> str:
     return f"tanggal {dt.day} bulan {BULAN_ID[dt.month]} tahun {dt.year}"
 
 
-def _xml_paragraphs(doc):
+def _xml_paragraphs(doc) -> list:
     return doc.element.xpath(".//w:p")
 
 
@@ -131,14 +127,14 @@ def _p_text(p_el) -> str:
     return "".join(t.text or "" for t in p_el.xpath(".//w:t"))
 
 
-def _clear_highlights(p_el):
+def _clear_highlights(p_el) -> None:
     for hl in p_el.xpath(".//w:highlight"):
         parent = hl.getparent()
         if parent is not None:
             parent.remove(hl)
 
 
-def _p_set(p_el, value: str):
+def _p_set(p_el, value: str) -> None:
     texts = p_el.xpath(".//w:t")
     if not texts:
         return
@@ -148,7 +144,7 @@ def _p_set(p_el, value: str):
     _clear_highlights(p_el)
 
 
-def _replace_placeholders(doc, subs):
+def _replace_placeholders(doc, subs: list[tuple[str, str]]) -> None:
     for p_el in _xml_paragraphs(doc):
         text = _p_text(p_el)
         if not text:
@@ -160,13 +156,13 @@ def _replace_placeholders(doc, subs):
             _p_set(p_el, new)
 
 
-def _set_paragraph_if_contains(doc, needle: str, value: str):
+def _set_paragraph_if_contains(doc, needle: str, value: str) -> None:
     for p_el in _xml_paragraphs(doc):
         if needle.lower() in _p_text(p_el).lower():
             _p_set(p_el, value)
 
 
-def _set_cell(cell, value, size=None):
+def _set_cell(cell, value, size: int | None = None) -> None:
     paragraphs = cell.paragraphs or [cell.add_paragraph()]
     for idx, p in enumerate(paragraphs):
         if p.runs:
@@ -181,7 +177,7 @@ def _set_cell(cell, value, size=None):
                 r.font.size = Pt(size)
 
 
-def _unique_cells(cells):
+def _unique_cells(cells: list) -> list:
     seen, out = set(), []
     for cell in cells:
         if id(cell._tc) in seen:
@@ -194,21 +190,18 @@ def _unique_cells(cells):
 def generate_contract_docx(order: dict, customer: dict, contract: dict) -> bytes:
     doc = Document(str(CONTRACT_TEMPLATE_PATH))
     branch = detect_pt_branch(customer.get("kota_kab", ""), customer.get("alamat_pemasangan", ""))
-
-    nama = customer.get("nama", "-")
     details = order.get("details", [])
     total_unit = sum(d.get("quantity", 0) for d in details)
     items_desc = ", ".join(f"{d['nama']} ({d['quantity']} unit)" for d in details)
     sewa = sum(d.get("harga", 0) * d.get("quantity", 0) for d in details)
     total_awal = (order.get("estimasi") or {}).get("total", sewa + 650000)
-    durasi = order.get("durasi_sewa", "-")
 
     subs = [
         (r"tanggal\s*_+\s*bulan\s*_+\s*tahun\s*_+", _long_date(contract.get("created_at"))),
         (r"\{daerah cabang\}", branch["code"]),
         (r"\{NIB Cabang\}", branch["nib"]),
         (r"\{Alamat lengkap daerah cabang\}", branch["alamat"]),
-        (r"\(Nama lengkap\)", nama),
+        (r"\(Nama lengkap\)", customer.get("nama", "-")),
         (r"\{Alamat seusai KTP penyewa\s*\}", customer.get("alamat_ktp", "-")),
         (r"\{NIK penyewa\}", customer.get("nik") or "-"),
         (r"\{no telp\}", customer.get("no_hp", "-")),
@@ -217,90 +210,106 @@ def generate_contract_docx(order: dict, customer: dict, contract: dict) -> bytes
         (r"\{detail Alamat pemasangan yang di input customer\}", customer.get("alamat_pemasangan", "-")),
         (r"Rp\s*_\s*\{nominal angka\},-\s*\{nominal terbilagn\}", f"{_rp(total_awal)},- ({terbilang(total_awal)} rupiah)"),
         (r"Biaya sewa bulan pertama: Rp_+", f"Biaya sewa bulan pertama: {_rp(sewa)}"),
-        (r"jangka waktu 1 \(satu\) bulan kalender", f"jangka waktu {durasi} bulan kalender"),
+        (r"jangka waktu 1 \(satu\) bulan kalender", f"jangka waktu {order.get('durasi_sewa', '-')} bulan kalender"),
         (r"selanjutnya sebesar Rp_+", f"selanjutnya sebesar {_rp(sewa)}"),
     ]
     _replace_placeholders(doc, subs)
-
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
 
 
-def generate_invoice_docx(order: dict, customer: dict, invoice: dict) -> bytes:
-    doc = Document(str(INVOICE_TEMPLATE_PATH))
+def _invoice_context(order: dict, customer: dict, invoice: dict) -> dict:
     branch = detect_pt_branch(customer.get("kota_kab", ""), customer.get("alamat_pemasangan", ""))
     details = order.get("details", [])
-    total_unit = sum(d.get("quantity", 0) for d in details)
-    kapasitas = " / ".join(sorted({d.get("kapasitas", "").replace(" PK", "") for d in details if d.get("kapasitas")})) or "-"
-    variants = " / ".join(sorted({d.get("variant", "Standart") for d in details})) or "Standart"
-    sewa = next((i.get("amount", 0) for i in invoice.get("items", []) if "Sewa bulan pertama" in i.get("label", "")), 0)
-    total = invoice.get("total", 0)
     dt = _parse_dt(invoice.get("issued_at") or invoice.get("created_at"))
-    invoice_date = dt.strftime("%d/%m/%Y")
     extra_meter = invoice.get("extra_pipa_meter") or 0
     extra_cost = invoice.get("biaya_extra_pipa") or 0
     note = "Pembayaran dilakukan setelah instalasi selesai dan invoice terbit."
     if extra_meter:
         note = f"Extra pipa {extra_meter} m × {_rp(130000)} = {_rp(extra_cost)} (pipa terpakai {invoice.get('total_pipa_meter', '-')} m). " + note
+    return {
+        "branch": branch,
+        "customer_nama": customer.get("nama", "-"),
+        "alamat_ktp": customer.get("alamat_ktp", "-"),
+        "total_unit": sum(d.get("quantity", 0) for d in details),
+        "kapasitas": " / ".join(sorted({d.get("kapasitas", "").replace(" PK", "") for d in details if d.get("kapasitas")})) or "-",
+        "variants": " / ".join(sorted({d.get("variant", "Standart") for d in details})) or "Standart",
+        "sewa": next((i.get("amount", 0) for i in invoice.get("items", []) if "Sewa bulan pertama" in i.get("label", "")), 0),
+        "total": invoice.get("total", 0),
+        "dt": dt,
+        "invoice_date": dt.strftime("%d/%m/%Y"),
+        "nomor": invoice.get("nomor", "-"),
+        "rekening": invoice.get("rekening", "-"),
+        "note": note,
+    }
 
-    subs = [
-        (r"\{tanggal invoice dd/mm/yyyy\}", invoice_date),
-        (r"\{nama lengkap\}", customer.get("nama", "-")),
-        (r"\{nama lengkap customer\}", customer.get("nama", "-")),
-        (r"\{Alamat sesuai KTP[^}]*\}", customer.get("alamat_ktp", "-")),
-        (r"\{kapasistas PK\}", kapasitas),
-        (r"\{kapasitas PK\}", kapasitas),
-        (r"\{\{?tipe Inverter / Standart\}\}?", variants),
-        (r"\{banyak unit\}", str(total_unit)),
-        (r"\{biaya nominal angka\}", _num(sewa)),
-        (r"\{total yang dibayar\}", _num(total)),
-        (r"\{nominal terbilang\}", f"{terbilang(total)} rupiah"),
-        (r"\{rekening tujuan[^}]*\}", invoice.get("rekening", "-")),
-        (r"\{[^}]*daerah cabang[^}]*\}", branch["code"]),
-        (r"tanggal\s*_+\s*bulan\s*_+\s*tahun\s*_+", f"tanggal {dt.day} bulan {BULAN_ID[dt.month]} tahun {dt.year}"),
+
+def _invoice_subs(ctx: dict) -> list[tuple[str, str]]:
+    return [
+        (r"\{tanggal invoice dd/mm/yyyy\}", ctx["invoice_date"]),
+        (r"\{nama lengkap\}", ctx["customer_nama"]),
+        (r"\{nama lengkap customer\}", ctx["customer_nama"]),
+        (r"\{Alamat sesuai KTP[^}]*\}", ctx["alamat_ktp"]),
+        (r"\{kapasistas PK\}", ctx["kapasitas"]),
+        (r"\{kapasitas PK\}", ctx["kapasitas"]),
+        (r"\{\{?tipe Inverter / Standart\}\}?", ctx["variants"]),
+        (r"\{banyak unit\}", str(ctx["total_unit"])),
+        (r"\{biaya nominal angka\}", _num(ctx["sewa"])),
+        (r"\{total yang dibayar\}", _num(ctx["total"])),
+        (r"\{nominal terbilang\}", f"{terbilang(ctx['total'])} rupiah"),
+        (r"\{rekening tujuan[^}]*\}", ctx["rekening"]),
+        (r"\{[^}]*daerah cabang[^}]*\}", ctx["branch"]["code"]),
+        (r"tanggal\s*_+\s*bulan\s*_+\s*tahun\s*_+", f"tanggal {ctx['dt'].day} bulan {BULAN_ID[ctx['dt'].month]} tahun {ctx['dt'].year}"),
     ]
-    _replace_placeholders(doc, subs)
-    _set_paragraph_if_contains(doc, "PT Mula Collermind {", f"PT Mula Collermind {branch['code']}")
-    _set_paragraph_if_contains(doc, "{nama lengkap customer}", f"{customer.get('nama', '-')}\t\t\tPT Mula Collermind {branch['code']}")
+
+
+def _fill_invoice_tables(doc, ctx: dict) -> None:
+    if not doc.tables:
+        return
+    table = doc.tables[0]
+    right_cells = _unique_cells([table.rows[0].cells[-1], table.rows[1].cells[-1]])
+    if len(right_cells) == 1:
+        _set_cell(right_cells[0], f"{ctx['invoice_date']}\n{ctx['nomor']}", size=8)
+    elif len(right_cells) > 1:
+        _set_cell(right_cells[0], ctx["invoice_date"], size=9)
+        _set_cell(right_cells[1], ctx["nomor"], size=8)
+    _set_cell(table.rows[1].cells[1], ctx["customer_nama"])
+    _set_cell(table.rows[2].cells[1], ctx["alamat_ktp"], size=9)
+    _set_cell(table.rows[6].cells[1], f"Pemasangan Unit AC Split {ctx['kapasitas']} PK {ctx['variants']}", size=9)
+    _set_cell(table.rows[7].cells[1], f"Sewa AC Baru {ctx['kapasitas']} PK {ctx['variants']}", size=9)
+    _set_cell(table.rows[7].cells[3], _num(ctx["sewa"]), size=9)
+    _set_cell(table.rows[7].cells[-1], _num(ctx["sewa"]), size=9)
+    _set_cell(table.rows[9].cells[1], f"Note\n{ctx['note']}", size=9)
+    payment_text = f"Silahkan melakukan pembayaran ke :\n{ctx['rekening']}\nPT Mula Collermind {ctx['branch']['code']}"
+    payment_cells = _unique_cells([table.rows[10].cells[1], table.rows[11].cells[1], table.rows[12].cells[1]])
+    if payment_cells:
+        _set_cell(payment_cells[0], payment_text, size=9)
+    _set_cell(table.rows[10].cells[-1], _num(ctx["total"]), size=9)
+    terbilang_cells = _unique_cells(table.rows[12].cells[3:])
+    if terbilang_cells:
+        _set_cell(terbilang_cells[0], f"{terbilang(ctx['total'])} rupiah", size=9)
+    if len(doc.tables) > 1:
+        bast = doc.tables[1]
+        _set_cell(bast.rows[0].cells[1], f"Pemasangan Unit AC Split {ctx['kapasitas']} PK", size=9)
+        _set_cell(bast.rows[0].cells[2], f"{ctx['total_unit']} Unit", size=9)
+        _set_cell(bast.rows[1].cells[1], f"AC {ctx['kapasitas']} PK {ctx['variants']}", size=9)
+        _set_cell(bast.rows[1].cells[2], f"{ctx['total_unit']} Unit", size=9)
+
+
+def generate_invoice_docx(order: dict, customer: dict, invoice: dict) -> bytes:
+    doc = Document(str(INVOICE_TEMPLATE_PATH))
+    ctx = _invoice_context(order, customer, invoice)
+    _replace_placeholders(doc, _invoice_subs(ctx))
+    _set_paragraph_if_contains(doc, "PT Mula Collermind {", f"PT Mula Collermind {ctx['branch']['code']}")
+    _set_paragraph_if_contains(doc, "{nama lengkap customer}", f"{ctx['customer_nama']}\t\t\tPT Mula Collermind {ctx['branch']['code']}")
     for needle in ("sesuai alamat  pemasangan", "kota/kabupaten ...}"):
         _set_paragraph_if_contains(doc, needle, "")
-
     try:
-        table = doc.tables[0]
-        right_cells = _unique_cells([table.rows[0].cells[-1], table.rows[1].cells[-1]])
-        if len(right_cells) == 1:
-            _set_cell(right_cells[0], f"{invoice_date}\n{invoice.get('nomor', '-')}", size=8)
-        elif len(right_cells) > 1:
-            _set_cell(right_cells[0], invoice_date, size=9)
-            _set_cell(right_cells[1], invoice.get("nomor", "-"), size=8)
-        _set_cell(table.rows[1].cells[1], customer.get("nama", "-"))
-        _set_cell(table.rows[2].cells[1], customer.get("alamat_ktp", "-"), size=9)
-        _set_cell(table.rows[6].cells[1], f"Pemasangan Unit AC Split {kapasitas} PK {variants}", size=9)
-        _set_cell(table.rows[7].cells[1], f"Sewa AC Baru {kapasitas} PK {variants}", size=9)
-        _set_cell(table.rows[7].cells[3], _num(sewa), size=9)
-        _set_cell(table.rows[7].cells[-1], _num(sewa), size=9)
-        _set_cell(table.rows[9].cells[1], f"Note\n{note}", size=9)
-        payment_text = f"Silahkan melakukan pembayaran ke :\n{invoice.get('rekening', '-')}\nPT Mula Collermind {branch['code']}"
-        payment_cells = _unique_cells([table.rows[10].cells[1], table.rows[11].cells[1], table.rows[12].cells[1]])
-        if payment_cells:
-            _set_cell(payment_cells[0], payment_text, size=9)
-        _set_cell(table.rows[10].cells[-1], _num(total), size=9)
-        terbilang_cells = _unique_cells(table.rows[12].cells[3:])
-        if terbilang_cells:
-            _set_cell(terbilang_cells[0], f"{terbilang(total)} rupiah", size=9)
+        _fill_invoice_tables(doc, ctx)
     except Exception:
-        logger.exception("document generation fallback")
-
-    try:
-        bast = doc.tables[1]
-        _set_cell(bast.rows[0].cells[1], f"Pemasangan Unit AC Split {kapasitas} PK", size=9)
-        _set_cell(bast.rows[0].cells[2], f"{total_unit} Unit", size=9)
-        _set_cell(bast.rows[1].cells[1], f"AC {kapasitas} PK {variants}", size=9)
-        _set_cell(bast.rows[1].cells[2], f"{total_unit} Unit", size=9)
-    except Exception:
-        logger.exception("document generation fallback")
-
+        logger.exception("invoice template table mapping failed")
+        raise
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
